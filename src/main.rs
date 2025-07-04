@@ -51,6 +51,15 @@ async fn fetch_all_messages(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: after implementing clap, add a flag for this with different levels
+    // also an output path
+    let log_file = tracing_appender::rolling::never(".", "met-export-log.txt");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(non_blocking)
+        .init();
+
     // Prompt user for account data
     let user = UserInfo::prompt_user_info().await?;
 

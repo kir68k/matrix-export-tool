@@ -14,6 +14,7 @@ use matrix_sdk::{
         events::room::message::SyncRoomMessageEvent, room_id,
     },
 };
+use promkit::crossterm::style::Stylize;
 
 /// Fetch all available messages from a room
 async fn fetch_all_messages(
@@ -111,6 +112,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    println!("{}", "Logging out".italic().yellow());
+    client.logout().await?;
 
     Ok(())
 }

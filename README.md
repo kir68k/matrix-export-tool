@@ -6,9 +6,9 @@ Currently it's minimal in features, only having a prompt ui and printing to stdo
 Plans for features/improvements (no eta):
 - [ ] Add CLI arguments
 - [ ] Switch for order of messages (chronologically or reverse)
-- [ ] Direct export to a file
+- [x] Direct export to a file
     - [ ] Export in formats like json
-- [ ] Improve fetching messages
+- [x] Improve fetching messages
 - [ ] *Silent mode*, import a preset file with account data\
 This is useful for periodic exports and debugging.
 

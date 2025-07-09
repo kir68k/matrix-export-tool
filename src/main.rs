@@ -2,6 +2,7 @@ mod cli;
 mod utils;
 
 use cli::interface::UserInfo;
+use cli::prompts;
 
 use matrix_sdk::config::SyncSettings;
 use promkit::crossterm::style::Stylize;
@@ -23,8 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Log in and synchronize state
     println!("Logging in...");
-    let client = utils::login(&user).await?;
-    client.sync_once(SyncSettings::default()).await?;
+    let client = utils::client::login(&user).await?;
+
+    // background sync
+    // TODO: this is rlly only needed during verification, redo?
+    let client_cloned = client.clone();
+    tokio::task::spawn(async move { client_cloned.sync(SyncSettings::default()).await });
 
     // Import E2EE keys
     println!("Importing keys...");
@@ -37,15 +42,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         keys.imported_count, keys.total_count
     );
 
+    println!("Verifying client...");
+    if !utils::client::verify_client(&client).await? {
+        println!("{}", "Skipping verification".yellow());
+    }
+
     // Prompt room selection and wait
-    let selected_rooms = utils::select_room(&client).await?;
+    let selected_rooms = prompts::select_room(&client).await?;
 
     // export selected rooms concurrently
     let mut tasks = JoinSet::new();
     for room_id in selected_rooms {
         let room = client.get_room(&room_id).unwrap();
         tasks.spawn(async move {
-            if let Err(err) = utils::export_room(&room).await {
+            if let Err(err) = utils::export::export_room(&room).await {
                 eprintln!("{} {err}", "Export error:".red().bold());
             }
         });

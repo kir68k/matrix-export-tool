@@ -8,15 +8,15 @@ use matrix_sdk::{
     ruma::events::{MessageLikeEvent, room::message::RoomMessageEvent},
 };
 
-use tokio::{fs::File, io::AsyncWriteExt};
+use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use promkit::crossterm::style::Stylize;
 
-/// Fetch all available message chunks from server
-async fn fetch_chunks(room: &Room) -> anyhow::Result<Vec<TimelineEvent>> {
+/// Fetch message chunks and send to a receiver
+async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyhow::Result<()> {
     let mut options = MessagesOptions::backward();
-    let mut result: Vec<TimelineEvent> = Vec::new();
-    // make name pretty
+    let mut total = 0;
+    // make name pwetty
     let name = room
         .cached_display_name()
         .unwrap()
@@ -24,53 +24,76 @@ async fn fetch_chunks(room: &Room) -> anyhow::Result<Vec<TimelineEvent>> {
         .bold()
         .white();
 
-    // TODO: Rate limiting?
-    // Not sure how expensive these requests are for a server...
     loop {
+        // 100 is the max (or so it seems)
         options.limit = ruma::UInt::from(100u8);
 
         let page = room.messages(options).await?;
-        result.extend(page.chunk);
-        println!("{}: Fetched {} messages", name, result.len());
+        let mut chunk = page.chunk;
+        chunk.reverse(); // backward() = reverse, so this is reverse-reverse (...)
+
+        total += chunk.len();
+        println!(
+            "{}: Fetched {} messages (total: {})",
+            name,
+            chunk.len(),
+            total
+        );
+
+        if let Err(_) = tx.send(chunk).await {
+            break;
+        }
 
         let Some(token) = page.end else {
             break;
         };
 
-        // Reset options
         options = MessagesOptions::backward().from(&*token);
     }
 
     println!("{}: {}", name, "Fetched all messages".green().italic());
-    // Reverse order (coz backward())
-    result.reverse();
-
-    anyhow::Ok(result)
+    anyhow::Ok(())
 }
 
 /// Export messages to a file
-pub async fn export_room(room: &Room) -> anyhow::Result<()> {
-    let name = room.cached_display_name().unwrap().to_string();
+pub async fn export_room(room: Room) -> anyhow::Result<()> {
+    let name = room.display_name().await?.to_string();
     let mut file = File::create(format!("{}-export.txt", name)).await?;
 
-    let messages = fetch_chunks(room).await?;
+    // channel to download messages and write to file
+    // before, it fetched everything to memory *then* wrote, not good.
+    let (tx, mut rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
 
-    for message in messages {
-        if let TimelineEventKind::Decrypted(decrypted) = &message.kind {
-            if let Ok(MessageLikeEvent::Original(original)) =
-                decrypted.event.deserialize_as::<RoomMessageEvent>()
-            {
-                let line = format!(
-                    "{:?} — {}: {}\n",
-                    original.origin_server_ts,
-                    original.sender,
-                    original.content.body()
-                );
+    let fetch_handle = tokio::spawn(async move {
+        if let Err(e) = fetch_chunks(room, tx).await {
+            eprintln!("Couldn't fetch events: {}", e);
+        }
+    });
 
-                file.write_all(line.as_bytes()).await?;
+    // update: this still feels icky
+    while let Some(chunk) = rx.recv().await {
+        for message in chunk {
+            if let TimelineEventKind::Decrypted(decrypted) = &message.kind {
+                if let Ok(MessageLikeEvent::Original(original)) =
+                    decrypted.event.deserialize_as::<RoomMessageEvent>()
+                {
+                    let line = format!(
+                        "{:?} — {}: {}\n",
+                        original.origin_server_ts,
+                        original.sender,
+                        original.content.body()
+                    );
+
+                    file.write_all(line.as_bytes()).await?;
+                }
             }
         }
+        file.flush().await?;
     }
+    fetch_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("Fetch task failed: {}", e))?;
+
     println!("{}: {}", name.bold(), "Export complete".bold().italic());
 
     // extra io check

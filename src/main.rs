@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for room_id in selected_rooms {
         let room = client.get_room(&room_id).unwrap();
         tasks.spawn(async move {
-            if let Err(err) = utils::export::export_room(&room).await {
+            if let Err(err) = utils::export::export_room(room).await {
                 eprintln!("{} {err}", "Export error:".red().bold());
             }
         });

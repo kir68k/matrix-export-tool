@@ -24,7 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Log in and synchronize state
     println!("Logging in...");
     let client = utils::login(&user).await?;
-    client.sync_once(SyncSettings::default()).await?;
+
+    // background sync
+    // TODO: this is rlly only needed during verification, redo?
+    let client_cloned = client.clone();
+    tokio::task::spawn(async move { client_cloned.sync(SyncSettings::default()).await });
 
     // Import E2EE keys
     println!("Importing keys...");
@@ -36,6 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Imported {} keys out of {}",
         keys.imported_count, keys.total_count
     );
+
+    println!("Verifying client...");
+    if !utils::verify_client(&client).await? {
+        println!("{}", "Skipping verification".yellow());
+    }
 
     // Prompt room selection and wait
     let selected_rooms = utils::select_room(&client).await?;

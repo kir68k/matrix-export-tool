@@ -1,5 +1,9 @@
 use crate::cli::interface::UserInfo;
-use anyhow::{Error, Result, bail};
+use anyhow::{Error, Result, anyhow, bail};
+use matrix_sdk::crypto::SasState;
+use matrix_sdk::encryption::verification::{
+    QrVerificationState, VerificationRequest, VerificationRequestState, format_emojis,
+};
 use matrix_sdk::{
     Client, Room,
     config::SyncSettings,
@@ -7,11 +11,17 @@ use matrix_sdk::{
     room::MessagesOptions,
     ruma::{
         OwnedRoomId, UInt, UserId,
-        events::{MessageLikeEvent, room::message::RoomMessageEvent},
+        events::{
+            MessageLikeEvent,
+            key::verification::VerificationMethod::{QrCodeScanV1, SasV1},
+            room::message::RoomMessageEvent,
+        },
     },
+    stream::StreamExt,
 };
+
 use promkit::crossterm::style::Stylize;
-use promkit::preset::checkbox::Checkbox;
+use promkit::preset::{checkbox::Checkbox, confirm::Confirm};
 use tokio::{fs::File, io::AsyncWriteExt};
 
 /// Log-in using a password and create a client
@@ -30,6 +40,108 @@ pub async fn login(user: &UserInfo) -> Result<Client> {
         .await?;
 
     anyhow::Ok(client)
+}
+
+/// Helper for SAS verification flow
+async fn verify_sas(req: &VerificationRequest) -> Result<()> {
+    let sas = req
+        .start_sas()
+        .await?
+        .ok_or_else(|| anyhow!("Failed to start emoji verification"))?;
+
+    while let Some(state) = sas.changes().next().await {
+        match state {
+            SasState::KeysExchanged {
+                emojis,
+                decimals: _,
+            } => {
+                let e = emojis.expect("Emoji support required");
+                println!("----- Emoji verification -----");
+                println!("{}", format_emojis(e.emojis));
+
+                let p = Confirm::new("Do these match on both devices?")
+                    .prompt()?
+                    .run()?;
+
+                match p.as_str() {
+                    "y" => sas.confirm().await?,
+                    _ => sas.cancel().await?,
+                }
+            }
+            SasState::Done { .. } => {
+                let device = sas.other_device();
+                println!(
+                    "{} {} ({})",
+                    "Verified with:".green().bold(),
+                    device.display_name().unwrap_or("no display name"),
+                    device.device_id()
+                );
+                break;
+            }
+            SasState::Cancelled(cancel_info) => {
+                eprintln!(
+                    "{} {}",
+                    "Request cancelled, reason:".italic().red(),
+                    cancel_info.reason()
+                );
+                break;
+            }
+            _ => (),
+        }
+    }
+
+    anyhow::Ok(())
+}
+
+/// Verify with cross-signing
+pub async fn verify_client(client: &Client) -> Result<bool> {
+    let p = Confirm::new("Start verification?").prompt()?.run()?;
+    match p.as_str() {
+        "y" => println!("{}", "Starting verification".bold().italic()),
+        _ => return anyhow::Ok(false),
+    }
+
+    // verify using own user identity
+    let identity = client
+        .encryption()
+        .request_user_identity(client.user_id().unwrap())
+        .await?
+        .ok_or(anyhow!("Failed to get user identity"))?;
+
+    // both m.qr_code.show.v1 and m.sas.v1 according to the docs
+    let request = identity.request_verification().await?;
+    let mut req_stream = request.changes();
+
+    while let Some(state) = req_stream.next().await {
+        match state {
+            VerificationRequestState::Ready { .. } => {
+                println!("{}", "Request ready".yellow());
+                break;
+            }
+            VerificationRequestState::Cancelled(cancel_info) => {
+                eprintln!(
+                    "{} {}",
+                    "Request cancelled, reason:".italic().red(),
+                    cancel_info.reason()
+                );
+                break;
+            }
+            VerificationRequestState::Done => {
+                println!("{}", "Verification completed".green());
+                break;
+            }
+            _ => (),
+        }
+    }
+
+    // TODO: add QR
+    if let Some(methods) = request.their_supported_methods() {
+        if methods.contains(&SasV1) {
+            verify_sas(&request).await?;
+        }
+    }
+
+    anyhow::Ok(true)
 }
 
 // Basically a hack for prompt to show display name
@@ -109,6 +221,8 @@ pub async fn fetch_chunks(room: &Room) -> anyhow::Result<Vec<TimelineEvent>> {
         .bold()
         .white();
 
+    // TODO: Rate limiting?
+    // Not sure how expensive these requests are for a server...
     loop {
         options.limit = UInt::from(100u8);
 

@@ -7,7 +7,7 @@ license = "ISC"
 
 [dependencies]
 anyhow = "1.0"
-matrix-sdk = { version = "0.12", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls"] }
+matrix-sdk = { version = "0.12", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls", "qrcode"] }
 promkit = { version = "0.9", features = ["all"] }
 promkit-derive = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls", "system-proxy"] }

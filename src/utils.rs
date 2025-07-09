@@ -2,7 +2,7 @@ use crate::cli::interface::UserInfo;
 use anyhow::{Error, Result, anyhow, bail};
 use matrix_sdk::crypto::SasState;
 use matrix_sdk::encryption::verification::{
-    QrVerificationState, VerificationRequest, VerificationRequestState, format_emojis,
+    VerificationRequest, VerificationRequestState, format_emojis,
 };
 use matrix_sdk::{
     Client, Room,
@@ -13,7 +13,7 @@ use matrix_sdk::{
         OwnedRoomId, UInt, UserId,
         events::{
             MessageLikeEvent,
-            key::verification::VerificationMethod::{QrCodeScanV1, SasV1},
+            key::verification::VerificationMethod,
             room::message::RoomMessageEvent,
         },
     },
@@ -43,7 +43,7 @@ pub async fn login(user: &UserInfo) -> Result<Client> {
 }
 
 /// Helper for SAS verification flow
-async fn verify_sas(req: &VerificationRequest) -> Result<()> {
+async fn verify_sas(req: VerificationRequest) -> Result<bool> {
     let sas = req
         .start_sas()
         .await?
@@ -84,13 +84,14 @@ async fn verify_sas(req: &VerificationRequest) -> Result<()> {
                     "Request cancelled, reason:".italic().red(),
                     cancel_info.reason()
                 );
-                break;
+
+                return anyhow::Ok(false);
             }
             _ => (),
         }
     }
 
-    anyhow::Ok(())
+    anyhow::Ok(true)
 }
 
 /// Verify with cross-signing
@@ -108,8 +109,10 @@ pub async fn verify_client(client: &Client) -> Result<bool> {
         .await?
         .ok_or(anyhow!("Failed to get user identity"))?;
 
-    // both m.qr_code.show.v1 and m.sas.v1 according to the docs
-    let request = identity.request_verification().await?;
+    // TODO: Add QR
+    let request = identity.request_verification_with_methods(
+        vec![VerificationMethod::SasV1, VerificationMethod::ReciprocateV1]
+    ).await?;
     let mut req_stream = request.changes();
 
     while let Some(state) = req_stream.next().await {
@@ -134,10 +137,14 @@ pub async fn verify_client(client: &Client) -> Result<bool> {
         }
     }
 
-    // TODO: add QR
+    // TODO: Add QR
     if let Some(methods) = request.their_supported_methods() {
-        if methods.contains(&SasV1) {
-            verify_sas(&request).await?;
+        if methods.contains(&VerificationMethod::SasV1) {
+            println!("Verifying by emoji");
+            verify_sas(request).await?;
+        } else {
+            eprintln!("{}", "Other device doesn't support emoji requests.".italic().red());
+            return anyhow::Ok(false);
         }
     }
 

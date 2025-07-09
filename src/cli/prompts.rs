@@ -1,4 +1,4 @@
-use anyhow::{bail, Error, Result};
+use anyhow::{Error, Result, bail};
 use matrix_sdk::{Client, ruma};
 use promkit::preset::checkbox::Checkbox;
 

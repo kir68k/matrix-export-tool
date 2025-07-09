@@ -1,16 +1,18 @@
-use anyhow::{anyhow, Result};
-use crate::cli::interface::UserInfo;
+use std::time::Duration;
 
-use matrix_sdk::{ruma, Client};
-use matrix_sdk::stream::StreamExt;
+use crate::cli::interface::UserInfo;
+use anyhow::{Result, anyhow};
+
 use matrix_sdk::encryption::{
     verification,
     verification::{SasState, VerificationRequestState},
 };
 use matrix_sdk::ruma::events::key::verification::VerificationMethod;
+use matrix_sdk::stream::StreamExt;
+use matrix_sdk::{Client, ruma};
 
-use promkit::preset::confirm::Confirm;
 use promkit::crossterm::style::Stylize;
+use promkit::preset::confirm::Confirm;
 
 /// Log-in using a password and create a client
 pub async fn login(user: &UserInfo) -> Result<Client> {
@@ -32,7 +34,9 @@ pub async fn login(user: &UserInfo) -> Result<Client> {
 
 /// Verify with cross-signing
 pub async fn verify_client(client: &Client) -> Result<bool> {
-    let p = Confirm::new("Start verification?").prompt()?.run()?;
+    let p = Confirm::new("Start verification? (Recommended, this enables cross-signing)")
+        .prompt()?
+        .run()?;
     match p.as_str() {
         "y" => println!("{}", "Starting verification".bold().italic()),
         _ => return anyhow::Ok(false),
@@ -46,9 +50,12 @@ pub async fn verify_client(client: &Client) -> Result<bool> {
         .ok_or(anyhow!("Failed to get user identity"))?;
 
     // TODO: Add QR
-    let request = identity.request_verification_with_methods(
-        vec![VerificationMethod::SasV1, VerificationMethod::ReciprocateV1]
-    ).await?;
+    let request = identity
+        .request_verification_with_methods(vec![
+            VerificationMethod::SasV1,
+            VerificationMethod::ReciprocateV1,
+        ])
+        .await?;
     let mut req_stream = request.changes();
 
     while let Some(state) = req_stream.next().await {
@@ -79,14 +86,22 @@ pub async fn verify_client(client: &Client) -> Result<bool> {
             println!("Verifying by emoji");
             verify_sas(request).await?;
         } else {
-            eprintln!("{}", "Other device doesn't support emoji requests.".italic().red());
+            eprintln!(
+                "{}",
+                "Other device doesn't support emoji requests."
+                    .italic()
+                    .red()
+            );
             return anyhow::Ok(false);
         }
     }
 
+    if cross_status(client).await.is_err() {
+        return anyhow::Ok(false);
+    }
+
     anyhow::Ok(true)
 }
-
 
 /// Helper for SAS verification flow
 async fn verify_sas(req: verification::VerificationRequest) -> Result<bool> {
@@ -136,6 +151,32 @@ async fn verify_sas(req: verification::VerificationRequest) -> Result<bool> {
             _ => (),
         }
     }
+
+    anyhow::Ok(true)
+}
+
+/// Runs a loop checking whether all keys are stored locally
+async fn cross_status(client: &Client) -> Result<bool> {
+    let encryption = client.encryption();
+
+    println!("{}", "Waiting for cross-signing to complete (60s)".yellow());
+    let timeout = tokio::time::timeout(Duration::from_secs(60), async {
+        while !encryption
+            .cross_signing_status()
+            .await
+            .unwrap()
+            .is_complete()
+        {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await;
+
+    if timeout.is_err() {
+        println!("{}", "Timed out".red());
+        return Err(anyhow!("Cross-signing check timed out"));
+    }
+    println!("{}", "Cross-signing is up".green());
 
     anyhow::Ok(true)
 }

@@ -1,7 +1,7 @@
 use matrix_sdk::{
+    Room,
     deserialized_responses::{TimelineEvent, TimelineEventKind},
     room::MessagesOptions,
-    Room,
 };
 use matrix_sdk::{
     ruma,

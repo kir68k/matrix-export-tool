@@ -1,3 +1,5 @@
+use std::io::stdout;
+
 use matrix_sdk::{
     Room,
     deserialized_responses::{TimelineEvent, TimelineEventKind},
@@ -10,7 +12,7 @@ use matrix_sdk::{
 
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
-use promkit::crossterm::style::Stylize;
+use promkit::crossterm::{cursor, style::Stylize, ExecutableCommand};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyhow::Result<()> {
@@ -25,6 +27,7 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
         .white();
 
     loop {
+        stdout().execute(cursor::SavePosition)?;
         // 100 is the max (or so it seems)
         options.limit = ruma::UInt::from(100u8);
 
@@ -39,6 +42,7 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
             chunk.len(),
             total
         );
+        stdout().execute(cursor::RestorePosition)?;
 
         if let Err(_) = tx.send(chunk).await {
             break;

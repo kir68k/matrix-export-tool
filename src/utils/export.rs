@@ -32,8 +32,7 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
         options.limit = ruma::UInt::from(100u8);
 
         let page = room.messages(options).await?;
-        let mut chunk = page.chunk;
-        chunk.reverse(); // backward() = reverse, so this is reverse-reverse (...)
+        let chunk = page.chunk;
 
         total += chunk.len();
         println!(
@@ -71,6 +70,7 @@ pub async fn export_room(room: Room) -> anyhow::Result<()> {
     let fetch_handle = tokio::spawn(async move {
         if let Err(e) = fetch_chunks(room, tx).await {
             eprintln!("Couldn't fetch events: {}", e);
+            return;
         }
     });
 

@@ -10,6 +10,19 @@ Room key files alone also might not have everything one needs (See [#5] for deta
 - File output\
 Concurrently downloads messages and writes them to a file.
 
+### Running
+This uses Nix (flake) as the build system. To build, use:
+```console
+$ nix build
+```
+The output will be placed in `./result/`.
+
+To run the program, use:
+```console
+$ nix run
+```
+See the [website](https://nixos.org/download) to install, and the [wiki](https://wiki.nixos.org/wiki/Flakes) to enable flakes (required).
+
 ### Performance
 After adding `mpsc::channel` for downloading and writing, I tested this on a room with >750k messages.
 200k events were downloaded in 10 minutes. Performance might be tested more later.

@@ -1721,6 +1721,7 @@ dependencies = [
  "promkit-derive",
  "reqwest",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

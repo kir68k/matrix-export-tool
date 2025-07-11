@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::{path::PathBuf, time::Duration};
 
 use promkit::crossterm::{
@@ -61,7 +62,7 @@ pub struct UserInfo {
 
 impl UserInfo {
     /// Prompt the user to fill out a new [`UserInfo`].
-    pub async fn prompt_user_info() -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn prompt_user_info() -> Result<Self, anyhow::Error> {
         stdout().execute(cursor::SavePosition)?;
 
         let title = "Press Up/Down to pick, Enter to confirm."
@@ -74,7 +75,12 @@ impl UserInfo {
         let user_info = loop {
             println!("{}", title);
             let mut res = Self::default();
-            res.build()?;
+
+            // [`Box<dyn std::error::Error>`] is inconvenient, so convert it
+            if let Err(e) = res.build() {
+                return Err(anyhow!("{}", e));
+            }
+
             let keys_valid = PathBuf::from(&res.keys_file).try_exists()?;
 
             if res.any_empty() || !keys_valid {

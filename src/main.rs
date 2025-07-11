@@ -9,7 +9,7 @@ use promkit::crossterm::style::Stylize;
 use tokio::task::JoinSet;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     // TODO: after implementing clap, add a flag for this with different levels
     // also an output path
     let log_file = tracing_appender::rolling::never(".", "met-export-log.txt");
@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .encryption()
         .import_room_keys((&user.keys_file).into(), &user.keys_pass)
         .await?;
+
     println!(
         "Imported {} keys out of {}",
         keys.imported_count, keys.total_count

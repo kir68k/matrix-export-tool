@@ -23,11 +23,13 @@ pub async fn login(user: &UserInfo) -> Result<Client> {
         .build()
         .await?;
 
+    println!("{}", "Logging in...".yellow());
     client
         .matrix_auth()
         .login_username(&uid, &user.password)
         .initial_device_display_name("matrix-export-tool")
         .await?;
+    println!("{}", "Logged in".green());
 
     anyhow::Ok(client)
 }

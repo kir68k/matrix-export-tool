@@ -12,7 +12,7 @@ use matrix_sdk::{
 
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
-use promkit::crossterm::{cursor, style::Stylize, ExecutableCommand};
+use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyhow::Result<()> {

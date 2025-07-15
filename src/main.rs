@@ -1,9 +1,12 @@
 mod cli;
 mod utils;
 
+use std::time::Duration;
+
 use cli::interface::UserInfo;
 use cli::prompts;
 
+use config::Config;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::presence::PresenceState;
 use promkit::crossterm::style::Stylize;
@@ -13,6 +16,29 @@ use tokio_util::sync::CancellationToken;
 // Keeping this for later as a reminder.
 // (force shutdown)
 // const EXIT_TIMEOUT: u64 = 10;
+
+/// Prompt delay, for readability (in ms)
+const P_DELAY: Duration = Duration::from_millis(750);
+
+/// Load user config, either by prompt or config file
+fn load_config() -> anyhow::Result<UserInfo> {
+    let settings = Config::builder()
+        .add_source(config::File::with_name("./met-config.toml"))
+        .add_source(config::Environment::with_prefix("MET"))
+        .build();
+
+    if let Ok(file) = settings {
+        println!("{}", "Loading from config, skipping prompt.".yellow());
+        std::thread::sleep(P_DELAY);
+
+        return UserInfo::from_config(file);
+    } else {
+        println!("{}", "Config not found, prompting.".yellow());
+        std::thread::sleep(P_DELAY);
+
+        return UserInfo::from_prompt();
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let token = CancellationToken::new();
-    let user = UserInfo::prompt_user_info()?;
+    let user = load_config()?;
     let client = utils::client::login(&user).await?;
 
     {

@@ -1,0 +1,4 @@
+userid = "@user:example.org"
+password = "password1"
+keys_file = "/tmp/very-secret-file"
+keys_pass = "password2"

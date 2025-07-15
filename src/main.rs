@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Prompt user for account data
-    let user = UserInfo::prompt_user_info().await?;
+    let user = UserInfo::prompt_user_info()?;
 
     // Log in and synchronize state
     println!("Logging in...");

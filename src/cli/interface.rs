@@ -7,7 +7,7 @@ use promkit::crossterm::{
 };
 use promkit_derive::Promkit;
 use std::io::stdout;
-use tokio::time::sleep;
+use std::thread::sleep;
 
 /// Initial information of a user
 /// The fields are filled through a prompt
@@ -62,7 +62,7 @@ pub struct UserInfo {
 
 impl UserInfo {
     /// Prompt the user to fill out a new [`UserInfo`].
-    pub async fn prompt_user_info() -> Result<Self, anyhow::Error> {
+    pub fn prompt_user_info() -> Result<Self, anyhow::Error> {
         stdout().execute(cursor::SavePosition)?;
 
         let title = "Press Up/Down to pick, Enter to confirm."
@@ -85,7 +85,7 @@ impl UserInfo {
 
             if res.any_empty() || !keys_valid {
                 println!("Empty field given or invalid path .\n");
-                sleep(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500));
                 stdout().execute(cursor::RestorePosition)?;
             } else {
                 break res;

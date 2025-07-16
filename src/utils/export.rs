@@ -14,9 +14,21 @@ use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
+use crate::utils::cache::{self, RoomExportCache, CACHE_INTERVAL};
+
 /// Fetch message chunks and send to a receiver
-async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyhow::Result<()> {
+async fn fetch_chunks(
+    room: Room,
+    msg_tx: mpsc::Sender<Vec<TimelineEvent>>,
+    mut cache: RoomExportCache
+) -> anyhow::Result<()> {
     let mut options = MessagesOptions::backward();
+    // Load a cached token, if one exists
+    if let Some(token) = cache.last_token() {
+        println!("{}", "Last message token found in cache, resuming from it instead.".green().italic());
+        options = options.from(token.as_str());
+    }
+
     let mut total = 0;
     // make name pwetty
     let name = room
@@ -26,6 +38,17 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
         .bold()
         .white();
 
+    let (cache_tx, cache_rx) = mpsc::channel::<String>(1);
+    cache.add_room_data(room.room_id().to_owned(), None);
+
+    // Background task, waits time, receives the last token from the main loop
+    // and sends it to the cache file.
+    tokio::spawn(async move {
+        cache.update_token(cache_rx).await
+    });
+
+    // This is used for caching.
+    let mut curr_chunk: u64 = 0;
     loop {
         stdout().execute(cursor::SavePosition)?;
         // 100 is the max (or so it seems)
@@ -35,6 +58,7 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
         let chunk = page.chunk;
 
         total += chunk.len();
+        curr_chunk += 1;
         println!(
             "{}: Fetched {} messages (total: {})",
             name,
@@ -43,13 +67,18 @@ async fn fetch_chunks(room: Room, tx: mpsc::Sender<Vec<TimelineEvent>>) -> anyho
         );
         stdout().execute(cursor::RestorePosition)?;
 
-        if let Err(_) = tx.send(chunk).await {
+        if let Err(_) = msg_tx.send(chunk).await {
             break;
         }
 
         let Some(token) = page.end else {
             break;
         };
+
+        // Run cache, currently every 10.000 messages.
+        if curr_chunk.is_multiple_of(CACHE_INTERVAL) {
+            cache_tx.send(token.clone()).await?;
+        }
 
         options = MessagesOptions::backward().from(&*token);
     }
@@ -66,9 +95,10 @@ pub async fn export_room(room: Room) -> anyhow::Result<()> {
     // channel to download messages and write to file
     // before, it fetched everything to memory *then* wrote, not good.
     let (tx, mut rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
+    let mut cache = RoomExportCache::import_cache()?;
 
     let fetch_handle = tokio::spawn(async move {
-        if let Err(e) = fetch_chunks(room, tx).await {
+        if let Err(e) = fetch_chunks(room, tx, cache).await {
             eprintln!("Couldn't fetch events: {}", e);
             return;
         }

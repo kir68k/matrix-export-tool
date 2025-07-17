@@ -1,9 +1,13 @@
 use std::{io::stdout, sync::Arc};
 
 use matrix_sdk::ruma::OwnedRoomId;
-use promkit::crossterm::{cursor, style::Stylize, ExecutableCommand};
+use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 use serde::{Deserialize, Serialize};
-use tokio::{fs::File, io::{AsyncWriteExt, BufWriter}, sync::mpsc::Receiver};
+use tokio::{
+    fs::File,
+    io::{AsyncWriteExt, BufWriter},
+    sync::mpsc::Receiver,
+};
 
 /// The "interval" for caching data.
 ///
@@ -26,7 +30,7 @@ const CACHE_FILE: &'static str = "met-cache.json";
 ///
 /// On larger exports, this cache gets created, and written to a file.
 /// The token here is of the last fetched message chunk.
-/// 
+///
 /// When the program runs again, this is imported (deserialized), and the export function
 /// continues from `last_token`, instead of starting over.
 #[derive(Clone, Serialize, Deserialize)]
@@ -34,14 +38,14 @@ pub struct RoomExportCache {
     /// Collection of room IDs
     room_id: Option<OwnedRoomId>,
     /// Collection of pagination tokens
-    last_token: Option<String>
+    last_token: Option<String>,
 }
 
 /// The final export cache. This is a collection of [`RoomExportCache`]s that can be exported to a
 /// file.
 #[derive(Clone, Serialize, Deserialize)]
 struct ExportCache {
-    inner: Vec<RoomExportCache>
+    inner: Vec<RoomExportCache>,
 }
 
 impl RoomExportCache {
@@ -49,7 +53,7 @@ impl RoomExportCache {
     pub fn new() -> Self {
         Self {
             room_id: None,
-            last_token: None
+            last_token: None,
         }
     }
 
@@ -114,15 +118,16 @@ impl RoomExportCache {
                     println!(
                         "{}\n{} {}\n{}",
                         "Cache file couldn't be recovered.".red(),
-                        "Reason:".white().bold(), e,
+                        "Reason:".white().bold(),
+                        e,
                         "Making a new cache in memory instead.".white()
                     );
-                    return Self::default()
+                    return Self::default();
                 }
             }
         } else {
             println!("{}", "Cache file not found, making a new one.".white());
-            return Self::default()
+            return Self::default();
         }
     }
 }

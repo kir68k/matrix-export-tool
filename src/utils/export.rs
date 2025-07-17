@@ -14,18 +14,23 @@ use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
-use crate::utils::cache::{RoomExportCache, CACHE_INTERVAL};
+use crate::utils::cache::{CACHE_INTERVAL, RoomExportCache};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(
     room: Room,
     msg_tx: mpsc::Sender<Vec<TimelineEvent>>,
-    mut cache: RoomExportCache
+    mut cache: RoomExportCache,
 ) -> anyhow::Result<()> {
     let mut options = MessagesOptions::backward();
     // Load a cached token, if one exists
     if let Some(token) = cache.last_token() {
-        println!("{}", "Last message token found in cache, resuming from it instead.".green().italic());
+        println!(
+            "{}",
+            "Last message token found in cache, resuming from it instead."
+                .green()
+                .italic()
+        );
         options = options.from(token.as_str());
     }
 
@@ -42,9 +47,7 @@ async fn fetch_chunks(
 
     // Background task for caching. It receives the last token from the main loop
     // and sends it to the cache file.
-    tokio::spawn(async move {
-        cache.update_token(cache_rx).await
-    });
+    tokio::spawn(async move { cache.update_token(cache_rx).await });
 
     // This is used for caching.
     let mut curr_chunk: u64 = 0;

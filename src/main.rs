@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", "Logging out...".yellow().italic());
     match client.logout().await {
         Ok(_) => println!("{}", "Logged out".italic().green()),
-        Err(e) => eprintln!("{} {}", "Error logging out:".italic().red(), e)
+        Err(e) => eprintln!("{} {}", "Error logging out:".italic().red(), e),
     }
 
     Ok(())

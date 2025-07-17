@@ -14,7 +14,7 @@ use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
-use crate::utils::cache::{self, RoomExportCache, CACHE_INTERVAL};
+use crate::utils::cache::{RoomExportCache, CACHE_INTERVAL};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(
@@ -39,9 +39,8 @@ async fn fetch_chunks(
         .white();
 
     let (cache_tx, cache_rx) = mpsc::channel::<String>(1);
-    cache.add_room_data(room.room_id().to_owned(), None);
 
-    // Background task, waits time, receives the last token from the main loop
+    // Background task for caching. It receives the last token from the main loop
     // and sends it to the cache file.
     tokio::spawn(async move {
         cache.update_token(cache_rx).await
@@ -95,7 +94,8 @@ pub async fn export_room(room: Room) -> anyhow::Result<()> {
     // channel to download messages and write to file
     // before, it fetched everything to memory *then* wrote, not good.
     let (tx, mut rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
-    let mut cache = RoomExportCache::import_cache()?;
+    let mut cache = RoomExportCache::import_cache();
+    cache.add_room_data(room.room_id().to_owned(), None);
 
     let fetch_handle = tokio::spawn(async move {
         if let Err(e) = fetch_chunks(room, tx, cache).await {

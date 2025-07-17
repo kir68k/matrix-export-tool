@@ -1,7 +1,7 @@
 use std::{io::stdout, sync::Arc};
 
 use matrix_sdk::ruma::OwnedRoomId;
-use promkit::crossterm::{cursor, ExecutableCommand};
+use promkit::crossterm::{cursor, style::Stylize, ExecutableCommand};
 use serde::{Deserialize, Serialize};
 use tokio::{fs::File, io::{AsyncWriteExt, BufWriter}, sync::mpsc::Receiver};
 
@@ -45,7 +45,7 @@ struct ExportCache {
 }
 
 impl RoomExportCache {
-    // Create a new, empty export cache.
+    /// Create a new, empty export cache.
     pub fn new() -> Self {
         Self {
             room_id: None,
@@ -98,14 +98,37 @@ impl RoomExportCache {
     ///
     /// This is synchronous, as it is used before starting any downloads.
     ///
-    /// If the file is not found or invalid, a new one is made.
-    pub fn import_cache() -> anyhow::Result<Self> {
-        let cache_file: Vec<u8> = std::fs::read(CACHE_FILE)?;
+    /// If the file is not found OR is invalid, a new cache is made.
+    pub fn import_cache() -> Self {
+        let file = std::fs::read_to_string(CACHE_FILE);
 
-        if let Ok(result) = serde_json::from_slice::<Self>(&*cache_file) {
-            return anyhow::Ok(result);
+        if let Ok(file) = file {
+            println!("{}", "Cache file found, recovering...".yellow());
+
+            match serde_json::from_str::<Self>(&file) {
+                Ok(cache) => {
+                    println!("{}", "Cache file recovered.".green());
+                    return cache;
+                }
+                Err(e) => {
+                    println!(
+                        "{}\n{} {}\n{}",
+                        "Cache file couldn't be recovered.".red(),
+                        "Reason:".white().bold(), e,
+                        "Making a new cache in memory instead.".white()
+                    );
+                    return Self::default()
+                }
+            }
         } else {
-            return anyhow::Ok(Self::new());
+            println!("{}", "Cache file not found, making a new one.".white());
+            return Self::default()
         }
+    }
+}
+
+impl Default for RoomExportCache {
+    fn default() -> Self {
+        Self::new()
     }
 }

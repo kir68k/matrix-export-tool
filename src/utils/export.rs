@@ -1,17 +1,16 @@
 use std::io::stdout;
 
-use matrix_sdk::{
-    Room,
-    deserialized_responses::TimelineEvent,
-    room::MessagesOptions,
-};
 use matrix_sdk::ruma;
+use matrix_sdk::{Room, deserialized_responses::TimelineEvent, room::MessagesOptions};
 
-use tokio::{fs::OpenOptions, io::{AsyncWriteExt, BufWriter}, sync::mpsc};
+use tokio::sync::mpsc;
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
-use crate::utils::cache::{output_cache::{self}, user_cache};
+use crate::utils::cache::{
+    output_cache::{self},
+    user_cache,
+};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(
@@ -45,12 +44,8 @@ async fn fetch_chunks(
     let (write_tx, write_rx) = mpsc::channel::<bool>(1);
 
     // Background tasks for caching a token and the output itself.
-    tokio::spawn(async move {
-        user_cache.update_token(user_cache_rx).await
-    });
-    tokio::spawn(async move {
-        out_cache.update_messages(msg_rx, write_rx).await
-    });
+    tokio::spawn(async move { user_cache.update_token(user_cache_rx).await });
+    tokio::spawn(async move { out_cache.update_messages(msg_rx, write_rx).await });
 
     // This is used for caching.
     let mut curr_chunk: u64 = 0;
@@ -97,16 +92,6 @@ async fn fetch_chunks(
 pub async fn export_room(room: Room) -> anyhow::Result<()> {
     let name = room.display_name().await?.to_string();
 
-    // appending is used in case of a cached token we resume from.
-    let file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(format!("{}-export.txt", name))
-        .await?;
-    let mut file_buf = BufWriter::with_capacity(3_000_000, file);
-
-    // channel to download messages and write to file
-    // before, it fetched everything to memory *then* wrote, not good.
     let mut user_cache = user_cache::RoomExportCache::import_cache();
     let out_cache = output_cache::FileCache::new(name.clone());
 
@@ -124,9 +109,5 @@ pub async fn export_room(room: Room) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Fetch task failed: {}", e))?;
 
     println!("{}: {}", name.bold(), "Export complete".bold().italic());
-
-    // extra io check
-    //file.flush().await?;
-    file_buf.flush().await?;
     anyhow::Ok(())
 }

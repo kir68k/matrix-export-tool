@@ -3,11 +3,7 @@ use std::io::stdout;
 use matrix_sdk::ruma::OwnedRoomId;
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 use serde::{Deserialize, Serialize};
-use tokio::{
-    fs::File,
-    io::AsyncWriteExt,
-    sync::mpsc::Receiver,
-};
+use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc::Receiver};
 
 /// The "interval" for caching data.
 ///

@@ -57,21 +57,24 @@ impl FileCache {
 
         // At first I thought this is gonna be bad and slow
         // turns out it's fine.
-        let string: String = messages.into_iter().map(|ev| {
-            if let TimelineEventKind::Decrypted(de) = &ev.kind
-                && let Ok(MessageLikeEvent::Original(orig)) =
-                    de.event.deserialize_as::<RoomMessageEvent>()
-            {
-                format!(
-                    "{:?} — {}: {}\n",
-                    orig.origin_server_ts,
-                    orig.sender,
-                    orig.content.body()
-                )
-            } else {
-                format!("Incorrect type.\n")
-            }
-        }).collect();
+        let string: String = messages
+            .into_iter()
+            .map(|ev| {
+                if let TimelineEventKind::Decrypted(de) = &ev.kind
+                    && let Ok(MessageLikeEvent::Original(orig)) =
+                        de.event.deserialize_as::<RoomMessageEvent>()
+                {
+                    format!(
+                        "{:?} — {}: {}\n",
+                        orig.origin_server_ts,
+                        orig.sender,
+                        orig.content.body()
+                    )
+                } else {
+                    format!("Incorrect type.\n")
+                }
+            })
+            .collect();
 
         out_file.write(string.as_bytes()).await?;
         out_file.flush().await?;

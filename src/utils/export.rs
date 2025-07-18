@@ -2,29 +2,26 @@ use std::io::stdout;
 
 use matrix_sdk::{
     Room,
-    deserialized_responses::{TimelineEvent, TimelineEventKind},
+    deserialized_responses::TimelineEvent,
     room::MessagesOptions,
 };
-use matrix_sdk::{
-    ruma,
-    ruma::events::{MessageLikeEvent, room::message::RoomMessageEvent},
-};
+use matrix_sdk::ruma;
 
-use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
+use tokio::{fs::OpenOptions, io::{AsyncWriteExt, BufWriter}, sync::mpsc};
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
-use crate::utils::cache::{CACHE_INTERVAL, RoomExportCache};
+use crate::utils::cache::{output_cache::{self}, user_cache};
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(
     room: Room,
-    msg_tx: mpsc::Sender<Vec<TimelineEvent>>,
-    mut cache: RoomExportCache,
+    mut user_cache: user_cache::RoomExportCache,
+    mut out_cache: output_cache::FileCache,
 ) -> anyhow::Result<()> {
     let mut options = MessagesOptions::backward();
     // Load a cached token, if one exists
-    if let Some(token) = cache.last_token() {
+    if let Some(token) = user_cache.last_token() {
         println!(
             "{}",
             "Last message token found in cache, resuming from it instead."
@@ -43,11 +40,17 @@ async fn fetch_chunks(
         .bold()
         .white();
 
-    let (cache_tx, cache_rx) = mpsc::channel::<String>(1);
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
+    let (user_cache_tx, user_cache_rx) = mpsc::channel::<String>(1);
+    let (write_tx, write_rx) = mpsc::channel::<bool>(1);
 
-    // Background task for caching. It receives the last token from the main loop
-    // and sends it to the cache file.
-    tokio::spawn(async move { cache.update_token(cache_rx).await });
+    // Background tasks for caching a token and the output itself.
+    tokio::spawn(async move {
+        user_cache.update_token(user_cache_rx).await
+    });
+    tokio::spawn(async move {
+        out_cache.update_messages(msg_rx, write_rx).await
+    });
 
     // This is used for caching.
     let mut curr_chunk: u64 = 0;
@@ -78,8 +81,9 @@ async fn fetch_chunks(
         };
 
         // Run cache, currently every 10.000 messages.
-        if curr_chunk.is_multiple_of(CACHE_INTERVAL) {
-            cache_tx.send(token.clone()).await?;
+        if curr_chunk.is_multiple_of(user_cache::CACHE_INTERVAL) {
+            user_cache_tx.send(token.clone()).await?;
+            write_tx.send(true).await?;
         }
 
         options = MessagesOptions::backward().from(&*token);
@@ -92,41 +96,29 @@ async fn fetch_chunks(
 /// Export messages to a file
 pub async fn export_room(room: Room) -> anyhow::Result<()> {
     let name = room.display_name().await?.to_string();
-    let mut file = File::create(format!("{}-export.txt", name)).await?;
+
+    // appending is used in case of a cached token we resume from.
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(format!("{}-export.txt", name))
+        .await?;
+    let mut file_buf = BufWriter::with_capacity(3_000_000, file);
 
     // channel to download messages and write to file
     // before, it fetched everything to memory *then* wrote, not good.
-    let (tx, mut rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
-    let mut cache = RoomExportCache::import_cache();
-    cache.add_room_data(room.room_id().to_owned(), None);
+    let mut user_cache = user_cache::RoomExportCache::import_cache();
+    let out_cache = output_cache::FileCache::new(name.clone());
+
+    user_cache.add_room_data(room.room_id().to_owned(), None);
 
     let fetch_handle = tokio::spawn(async move {
-        if let Err(e) = fetch_chunks(room, tx, cache).await {
+        if let Err(e) = fetch_chunks(room, user_cache, out_cache).await {
             eprintln!("Couldn't fetch events: {}", e);
             return;
         }
     });
 
-    // update: this still feels icky
-    while let Some(chunk) = rx.recv().await {
-        for message in chunk {
-            if let TimelineEventKind::Decrypted(decrypted) = &message.kind {
-                if let Ok(MessageLikeEvent::Original(original)) =
-                    decrypted.event.deserialize_as::<RoomMessageEvent>()
-                {
-                    let line = format!(
-                        "{:?} — {}: {}\n",
-                        original.origin_server_ts,
-                        original.sender,
-                        original.content.body()
-                    );
-
-                    file.write_all(line.as_bytes()).await?;
-                }
-            }
-        }
-        file.flush().await?;
-    }
     fetch_handle
         .await
         .map_err(|e| anyhow::anyhow!("Fetch task failed: {}", e))?;
@@ -134,6 +126,7 @@ pub async fn export_room(room: Room) -> anyhow::Result<()> {
     println!("{}: {}", name.bold(), "Export complete".bold().italic());
 
     // extra io check
-    file.flush().await?;
+    //file.flush().await?;
+    file_buf.flush().await?;
     anyhow::Ok(())
 }

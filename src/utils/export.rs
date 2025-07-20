@@ -1,6 +1,6 @@
 use std::io::stdout;
 
-use matrix_sdk::ruma;
+use matrix_sdk::ruma::UInt;
 use matrix_sdk::{Room, deserialized_responses::TimelineEvent, room::MessagesOptions};
 
 use tokio::sync::mpsc;
@@ -8,19 +8,49 @@ use tokio::sync::mpsc;
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
 
 use crate::utils::cache::{
+    CACHE_INTERVAL,
     output_cache::{self},
-    user_cache,
+    user_cache::{CACHE_DONE, ExportCache, RoomExportCache},
 };
+
+/// Convenience function, returns either a clone of the cached room, or a new one.
+/// If it's a new one, it gets added to the cache.
+fn get_room(cache: &ExportCache, room: &Room) -> RoomExportCache {
+    let room_id = room.room_id().to_owned();
+    let name = room.cached_display_name().unwrap().to_string();
+
+    if let Some(room) = cache
+        .get_inner()
+        .unwrap()
+        .rooms
+        .iter()
+        .find(|cached| cached.room_id().unwrap() == &room_id)
+    {
+        return room.clone();
+    } else {
+        let mut room = RoomExportCache::default();
+        room.add_room_data(room_id, name, None).add_to_global(cache);
+
+        return room;
+    }
+}
 
 /// Fetch message chunks and send to a receiver
 async fn fetch_chunks(
     room: Room,
-    mut user_cache: user_cache::RoomExportCache,
+    cache: &ExportCache,
     mut out_cache: output_cache::FileCache,
 ) -> anyhow::Result<()> {
     let mut options = MessagesOptions::backward();
+
+    let room_cache = get_room(cache, &room);
+
     // Load a cached token, if one exists
-    if let Some(token) = user_cache.last_token() {
+    if let Some(token) = room_cache.last_token() {
+        if token == CACHE_DONE {
+            return Err(anyhow::anyhow!("This export is marked as completed."));
+        }
+
         println!(
             "{}",
             "Last message token found in cache, resuming from it instead."
@@ -30,7 +60,6 @@ async fn fetch_chunks(
         options = options.from(token.as_str());
     }
 
-    let mut total = 0;
     // make name pwetty
     let name = room
         .cached_display_name()
@@ -40,19 +69,27 @@ async fn fetch_chunks(
         .white();
 
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
-    let (user_cache_tx, user_cache_rx) = mpsc::channel::<String>(1);
+    let (room_cache_tx, room_cache_rx) = mpsc::channel::<String>(1);
     let (write_tx, write_rx) = mpsc::channel::<bool>(1);
 
     // Background tasks for caching a token and the output itself.
-    tokio::spawn(async move { user_cache.update_token(user_cache_rx).await });
-    tokio::spawn(async move { out_cache.update_messages(msg_rx, write_rx).await });
+    let cache = cache.clone();
+    #[rustfmt::skip]
+    tokio::spawn(async move {
+        room_cache.update_token(room_cache_rx, &cache).await
+    });
+    #[rustfmt::skip]
+    tokio::spawn(async move {
+        out_cache.update_messages(msg_rx, write_rx).await
+    });
 
-    // This is used for caching.
+    // This is used for caching (and the other to let user know progress).
     let mut curr_chunk: u64 = 0;
+    let mut total = 0;
     loop {
         stdout().execute(cursor::SavePosition)?;
         // 100 is the max (or so it seems)
-        options.limit = ruma::UInt::from(100u8);
+        options.limit = UInt::from(100u8);
 
         let page = room.messages(options).await?;
         let chunk = page.chunk;
@@ -71,17 +108,20 @@ async fn fetch_chunks(
             break;
         }
 
-        let Some(token) = page.end else {
-            break;
-        };
+        if let Some(token) = page.end {
+            if curr_chunk.is_multiple_of(CACHE_INTERVAL) {
+                room_cache_tx.send(token.clone()).await?;
+                write_tx.send(true).await?;
+            }
 
-        // Run cache, currently every 10.000 messages.
-        if curr_chunk.is_multiple_of(user_cache::CACHE_INTERVAL) {
-            user_cache_tx.send(token.clone()).await?;
+            options = MessagesOptions::backward().from(&*token);
+            continue;
+        } else {
+            // on shorter exports below interval (or done ones), there's no point setting a real token.
+            room_cache_tx.send(CACHE_DONE.to_string()).await?;
             write_tx.send(true).await?;
+            break;
         }
-
-        options = MessagesOptions::backward().from(&*token);
     }
 
     println!("{}: {}", name, "Fetched all messages".green().italic());
@@ -89,16 +129,13 @@ async fn fetch_chunks(
 }
 
 /// Export messages to a file
-pub async fn export_room(room: Room) -> anyhow::Result<()> {
+pub async fn export_room(room: Room, cache: ExportCache) -> anyhow::Result<()> {
     let name = room.display_name().await?.to_string();
 
-    let mut user_cache = user_cache::RoomExportCache::import_cache();
     let out_cache = output_cache::FileCache::new(name.clone());
 
-    user_cache.add_room_data(room.room_id().to_owned(), None);
-
     let fetch_handle = tokio::spawn(async move {
-        if let Err(e) = fetch_chunks(room, user_cache, out_cache).await {
+        if let Err(e) = fetch_chunks(room, &cache, out_cache).await {
             eprintln!("Couldn't fetch events: {}", e);
             return;
         }

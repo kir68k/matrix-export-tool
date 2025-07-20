@@ -12,6 +12,7 @@ use matrix_sdk::ruma::presence::PresenceState;
 use promkit::crossterm::style::Stylize;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
+use utils::cache::user_cache::ExportCache;
 
 // Keeping this for later as a reminder.
 // (force shutdown)
@@ -86,11 +87,20 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let selected_rooms = prompts::select_room(&main_client).await?;
+        // (note) export data cache for all rooms.
+        // it has to be added here and cloned into the export tasks.
+        // the clones all point to the same `Arc<Mutex>`.
+        let cache = ExportCache::import_cache();
 
         let mut export_tasks = JoinSet::new();
         for room_id in selected_rooms {
+            let ref_cache = cache.clone();
             let room = main_client.get_room(&room_id).unwrap();
-            export_tasks.spawn(async move { utils::export::export_room(room).await });
+
+            #[rustfmt::skip]
+            export_tasks.spawn(async move {
+                utils::export::export_room(room, ref_cache).await
+            });
         }
 
         loop {

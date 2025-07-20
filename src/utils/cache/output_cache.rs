@@ -57,6 +57,7 @@ impl FileCache {
 
         // At first I thought this is gonna be bad and slow
         // turns out it's fine.
+        // I guess that's coz "With the encryption feature, messages are decrypted if possible" :D
         let string: String = messages
             .into_iter()
             .map(|ev| {

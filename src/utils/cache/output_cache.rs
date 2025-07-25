@@ -1,11 +1,15 @@
 use std::io::stdout;
 
 use matrix_sdk::{
-    deserialized_responses::{TimelineEvent, TimelineEventKind}, ruma::events::{
-        room::message::{MessageType, RoomMessageEvent, RoomMessageEventContent}, MessageLikeEvent, OriginalMessageLikeEvent
-    }, stream::StreamExt, Client
+    Client,
+    deserialized_responses::{TimelineEvent, TimelineEventKind},
+    ruma::events::{
+        MessageLikeEvent, OriginalMessageLikeEvent,
+        room::message::{MessageType, RoomMessageEvent, RoomMessageEventContent},
+    },
+    stream::StreamExt,
 };
-use promkit::crossterm::{ExecutableCommand, cursor};
+use promkit::core::crossterm::{ExecutableCommand, cursor};
 use tokio::{fs::DirBuilder, sync::mpsc::Receiver};
 use tracing::Level;
 
@@ -49,16 +53,15 @@ impl FileCache {
 
                 let cache = self.clone();
                 let client = client.clone();
-                process_handle.spawn(async move {
-                    cache.filter_types(cached_events, &client).await
-                });
+                process_handle
+                    .spawn(async move { cache.filter_types(cached_events, &client).await });
             }
         }
 
         while let Some(res) = process_handle.join_next().await {
             match res {
                 Ok(_) => (),
-                Err(err) => tracing::event!(Level::ERROR, "Event process/write task error: {err}")
+                Err(err) => tracing::event!(Level::ERROR, "Event process/write task error: {err}"),
             }
         }
 
@@ -80,78 +83,93 @@ impl FileCache {
         let available_events = cached_events
             .into_iter()
             .filter_map(|ev| match ev.kind {
-                TimelineEventKind::PlainText { event: plain } => {
-                    plain
-                        .deserialize_as::<RoomMessageEvent>()
-                        .ok()
-                        .and_then(|plain| {
-                            let MessageLikeEvent::Original(orig) = plain else {
-                                return None
-                            };
-                            Some(orig)
-                        })
-                },
-                TimelineEventKind::Decrypted(decrypted) => {
-                    decrypted
-                        .event
-                        .deserialize_as::<RoomMessageEvent>()
-                        .ok()
-                        .and_then(|de| {
-                            let MessageLikeEvent::Original(orig) = de else {
-                                return None
-                            };
-                            Some(orig)
-                        })
-                },
+                TimelineEventKind::PlainText { event: plain } => plain
+                    .deserialize_as::<RoomMessageEvent>()
+                    .ok()
+                    .and_then(|plain| {
+                        let MessageLikeEvent::Original(orig) = plain else {
+                            return None;
+                        };
+                        Some(orig)
+                    }),
+                TimelineEventKind::Decrypted(decrypted) => decrypted
+                    .event
+                    .deserialize_as::<RoomMessageEvent>()
+                    .ok()
+                    .and_then(|de| {
+                        let MessageLikeEvent::Original(orig) = de else {
+                            return None;
+                        };
+                        Some(orig)
+                    }),
                 _ => None,
             })
             .collect::<Vec<OriginalMessageLikeEvent<RoomMessageEventContent>>>();
 
-        let stream = tokio_stream::iter(available_events)
-            .for_each(|ev| async move {
-                // I don't like this.
-                let mut text_path = FilePath::new(format!("{}/text", self.user).into());
-                let mut media_path = FilePath::new(format!("{}/media", self.user).into());
+        let stream = tokio_stream::iter(available_events).for_each(|ev| async move {
+            // I don't like this.
+            let mut text_path = FilePath::new(format!("{}/text", self.user).into());
+            let mut media_path = FilePath::new(format!("{}/media", self.user).into());
 
-                match ev.content.msgtype {
-                    MessageType::Text(ref text) => {
-                        text_path.set_filename("text-export.txt");
-                        if let Err(e) = text.process_event(&ev, &text_path).await {
-                            tracing::event!(Level::ERROR, "MessageType::Text | Event ID: {} | Err: {e}", &ev.event_id);
-                        }
+            match ev.content.msgtype {
+                MessageType::Text(ref text) => {
+                    text_path.set_filename("text-export.txt");
+                    if let Err(e) = text.process_event(&ev, &text_path).await {
+                        tracing::event!(
+                            Level::ERROR,
+                            "MessageType::Text | Event ID: {} | Err: {e}",
+                            &ev.event_id
+                        );
                     }
-                    MessageType::File(ref file) => {
-                        media_path.set_filename(file.filename());
-                        if let Err(e) = file.process_event(&client.clone(), &media_path).await {
-                            tracing::event!(Level::ERROR, "MessageType::File | Event ID: {} | Err: {e}", &ev.event_id);
-                        }
-                    }
-                    MessageType::Image(ref image) => {
-                        media_path.set_filename(image.filename());
-                        if let Err(e) = image.process_event(&client.clone(), &media_path).await {
-                            tracing::event!(Level::ERROR, "MessageType::Image | Event ID: {} | Err: {e}", &ev.event_id);
-                        }
-                    }
-                    MessageType::Video(ref video) => {
-                        media_path.set_filename(video.filename());
-                        if let Err(e) = video.process_event(&client.clone(), &media_path).await {
-                            tracing::event!(Level::ERROR, "MessageType::Video | Event ID: {} | Err: {e}", &ev.event_id);
-                        }
-                    }
-                    MessageType::Audio(ref audio) => {
-                        media_path.set_filename(audio.filename());
-                        if let Err(e) = audio.process_event(&client.clone(), &media_path).await {
-                            tracing::event!(Level::ERROR, "MessageType::Audio | Event ID: {} | Err: {e}", &ev.event_id);
-                        }
-                    }
-                    MessageType::Emote(_)
-                    | MessageType::Notice(_)
-                    | MessageType::ServerNotice(_)
-                    | MessageType::Location(_)
-                    | MessageType::VerificationRequest(_)
-                    | _ => (),
                 }
-            });
+                MessageType::File(ref file) => {
+                    media_path.set_filename(file.filename());
+                    if let Err(e) = file.process_event(&client.clone(), &media_path).await {
+                        tracing::event!(
+                            Level::ERROR,
+                            "MessageType::File | Event ID: {} | Err: {e}",
+                            &ev.event_id
+                        );
+                    }
+                }
+                MessageType::Image(ref image) => {
+                    media_path.set_filename(image.filename());
+                    if let Err(e) = image.process_event(&client.clone(), &media_path).await {
+                        tracing::event!(
+                            Level::ERROR,
+                            "MessageType::Image | Event ID: {} | Err: {e}",
+                            &ev.event_id
+                        );
+                    }
+                }
+                MessageType::Video(ref video) => {
+                    media_path.set_filename(video.filename());
+                    if let Err(e) = video.process_event(&client.clone(), &media_path).await {
+                        tracing::event!(
+                            Level::ERROR,
+                            "MessageType::Video | Event ID: {} | Err: {e}",
+                            &ev.event_id
+                        );
+                    }
+                }
+                MessageType::Audio(ref audio) => {
+                    media_path.set_filename(audio.filename());
+                    if let Err(e) = audio.process_event(&client.clone(), &media_path).await {
+                        tracing::event!(
+                            Level::ERROR,
+                            "MessageType::Audio | Event ID: {} | Err: {e}",
+                            &ev.event_id
+                        );
+                    }
+                }
+                MessageType::Emote(_)
+                | MessageType::Notice(_)
+                | MessageType::ServerNotice(_)
+                | MessageType::Location(_)
+                | MessageType::VerificationRequest(_)
+                | _ => (),
+            }
+        });
 
         stream.await;
 

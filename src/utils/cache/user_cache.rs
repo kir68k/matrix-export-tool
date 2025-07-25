@@ -4,7 +4,7 @@ use std::{
 };
 
 use matrix_sdk::ruma::OwnedRoomId;
-use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
+use promkit::core::crossterm::{ExecutableCommand, cursor, style::Stylize};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
 

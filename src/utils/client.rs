@@ -11,7 +11,7 @@ use matrix_sdk::ruma::events::key::verification::VerificationMethod;
 use matrix_sdk::stream::StreamExt;
 use matrix_sdk::{Client, ruma};
 
-use promkit::crossterm::style::Stylize;
+use promkit::core::crossterm::style::Stylize;
 use promkit::preset::confirm::Confirm;
 
 /// Log-in using a password and create a client
@@ -37,8 +37,9 @@ pub async fn login(user: &UserInfo) -> Result<Client> {
 /// Verify with cross-signing
 pub async fn verify_client(client: &Client) -> Result<bool> {
     let p = Confirm::new("Start verification? (Recommended, this enables cross-signing)")
-        .prompt()?
-        .run()?;
+        .run()
+        .await?;
+
     match p.as_str() {
         "y" => println!("{}", "Starting verification".bold().italic()),
         _ => return anyhow::Ok(false),
@@ -123,8 +124,8 @@ async fn verify_sas(req: verification::VerificationRequest) -> Result<bool> {
                 println!("{}", verification::format_emojis(e.emojis));
 
                 let p = Confirm::new("Do these match on both devices?")
-                    .prompt()?
-                    .run()?;
+                    .run()
+                    .await?;
 
                 match p.as_str() {
                     "y" => sas.confirm().await?,

@@ -1,6 +1,6 @@
 use anyhow::{Error, Result, bail};
 use matrix_sdk::{Client, ruma};
-use promkit::preset::checkbox::Checkbox;
+use promkit::{Prompt, preset::checkbox::Checkbox};
 
 // Basically a hack for prompt to show display name
 // but use RoomId internally
@@ -45,8 +45,8 @@ pub async fn select_room(client: &Client) -> Result<Vec<ruma::OwnedRoomId>, Erro
     let selected = Checkbox::new(room_names.clone())
         .title("Select rooms to export")
         .checkbox_lines(10)
-        .prompt()?
-        .run()?;
+        .run()
+        .await?;
 
     if selected.is_empty() {
         bail!("No rooms selected.");

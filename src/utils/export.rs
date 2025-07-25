@@ -6,7 +6,7 @@ use matrix_sdk::{Room, deserialized_responses::TimelineEvent, room::MessagesOpti
 
 use tokio::sync::mpsc::{self, Sender};
 
-use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
+use promkit::core::crossterm::{ExecutableCommand, cursor, style::Stylize};
 use tokio::task::JoinSet;
 
 use crate::utils::cache::{
@@ -44,7 +44,7 @@ async fn fetch_chunks(
     mut options: MessagesOptions,
     room_cache_tx: Sender<String>,
     msg_tx: Sender<Vec<TimelineEvent>>,
-    write_tx: Sender<bool>
+    write_tx: Sender<bool>,
 ) -> anyhow::Result<()> {
     // make name pwetty
     let name = room
@@ -174,7 +174,7 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     while let Some(res) = export_handle.join_next().await {
         match res {
             Ok(_) => (),
-            Err(err) => eprintln!("Output task error: {err}")
+            Err(err) => eprintln!("Output task error: {err}"),
         }
     }
 

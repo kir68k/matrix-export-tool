@@ -3,7 +3,7 @@ use config::Config;
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
 
-use promkit::crossterm::{
+use promkit::core::crossterm::{
     ExecutableCommand, cursor,
     style::{Attribute, Color, ContentStyle, Stylize},
 };
@@ -64,7 +64,7 @@ pub struct UserInfo {
 
 impl UserInfo {
     /// Prompt the user to fill out a new [`UserInfo`].
-    pub fn from_prompt() -> anyhow::Result<Self> {
+    pub async fn from_prompt() -> anyhow::Result<Self> {
         stdout().execute(cursor::SavePosition)?;
 
         let title = "Press Up/Down to pick, Enter to confirm."
@@ -79,7 +79,7 @@ impl UserInfo {
             let mut res = Self::default();
 
             // [`Box<dyn std::error::Error>`] is inconvenient, so convert it
-            if let Err(e) = res.build() {
+            if let Err(e) = res.build().await {
                 return Err(anyhow!("{}", e));
             }
 

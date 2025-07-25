@@ -1,11 +1,13 @@
 use std::io::stdout;
 
+use matrix_sdk::Client;
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::{Room, deserialized_responses::TimelineEvent, room::MessagesOptions};
 
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Sender};
 
 use promkit::crossterm::{ExecutableCommand, cursor, style::Stylize};
+use tokio::task::JoinSet;
 
 use crate::utils::cache::{
     CACHE_INTERVAL,
@@ -35,31 +37,15 @@ fn get_room(cache: &ExportCache, room: &Room) -> RoomExportCache {
     }
 }
 
-/// Fetch message chunks and send to a receiver
+/// Fetch event chunks, send a token on cache interval hits, send events continuously, and a write
+/// signal. Write signals occur either when downloading finishes *or* the cache interval is hit.
 async fn fetch_chunks(
     room: Room,
-    cache: &ExportCache,
-    mut out_cache: output_cache::FileCache,
+    mut options: MessagesOptions,
+    room_cache_tx: Sender<String>,
+    msg_tx: Sender<Vec<TimelineEvent>>,
+    write_tx: Sender<bool>
 ) -> anyhow::Result<()> {
-    let mut options = MessagesOptions::backward();
-
-    let room_cache = get_room(cache, &room);
-
-    // Load a cached token, if one exists
-    if let Some(token) = room_cache.last_token() {
-        if token == CACHE_DONE {
-            return Err(anyhow::anyhow!("This export is marked as completed."));
-        }
-
-        println!(
-            "{}",
-            "Last message token found in cache, resuming from it instead."
-                .green()
-                .italic()
-        );
-        options = options.from(token.as_str());
-    }
-
     // make name pwetty
     let name = room
         .cached_display_name()
@@ -67,21 +53,6 @@ async fn fetch_chunks(
         .to_string()
         .bold()
         .white();
-
-    let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
-    let (room_cache_tx, room_cache_rx) = mpsc::channel::<String>(1);
-    let (write_tx, write_rx) = mpsc::channel::<bool>(1);
-
-    // Background tasks for caching a token and the output itself.
-    let cache = cache.clone();
-    #[rustfmt::skip]
-    tokio::spawn(async move {
-        room_cache.update_token(room_cache_rx, &cache).await
-    });
-    #[rustfmt::skip]
-    tokio::spawn(async move {
-        out_cache.update_messages(msg_rx, write_rx).await
-    });
 
     // This is used for caching (and the other to let user know progress).
     let mut curr_chunk: u64 = 0;
@@ -129,21 +100,83 @@ async fn fetch_chunks(
 }
 
 /// Export messages to a file
-pub async fn export_room(room: Room, cache: ExportCache) -> anyhow::Result<()> {
+pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> anyhow::Result<()> {
     let name = room.display_name().await?.to_string();
 
-    let out_cache = output_cache::FileCache::new(name.clone());
+    let room_cache = get_room(&cache, &room);
+    let mut out_cache = output_cache::FileCache::new(name.clone());
 
-    let fetch_handle = tokio::spawn(async move {
-        if let Err(e) = fetch_chunks(room, &cache, out_cache).await {
-            eprintln!("Couldn't fetch events: {}", e);
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
+    let (room_cache_tx, room_cache_rx) = mpsc::channel::<String>(100);
+    let (write_tx, write_rx) = mpsc::channel::<bool>(100);
+
+    // Load a cached token, if one exists, or quit if marked done.
+    let mut options = MessagesOptions::backward();
+    if let Some(token) = room_cache.last_token() {
+        if token == CACHE_DONE {
+            return Err(anyhow::anyhow!("This export is marked as completed."));
+        }
+        println!(
+            "{}",
+            "Last message token found in cache, resuming from it instead."
+                .green()
+                .italic()
+        );
+        options = options.from(token.as_str());
+    }
+
+    // remember, both of these are Arc internally :3
+    let output_client = client.clone();
+    let global_cache = cache.clone();
+
+    // All export tasks.
+    let mut export_handle = JoinSet::new();
+
+    // ----- these comments are here in case i forget :v -----
+    // Task #1: Event download
+    // This one takes all 3 mpsc senders, and sends to receivers in tasks #2-3.
+    export_handle.spawn(async move {
+        if let Err(e) = fetch_chunks(room, options, room_cache_tx, msg_tx, write_tx).await {
+            eprintln!("Couldn't fetch events: {e}");
+            return;
+        }
+    });
+    // Task #2: Token cache
+    // This takes the token cache receiver itself, and handles it internally.
+    #[rustfmt::skip]
+    export_handle.spawn(async move {
+        if let Err(e) = room_cache.update_token(room_cache_rx, &global_cache).await {
+            eprintln!("Error updating export cache: {e}");
+            return;
+        }
+    });
+    // Task #3: Process -> write events to files
+    // This takes the event & write receivers, and a cloned client.
+    // The write receiver just pokes FileCache to start exporting.
+    #[rustfmt::skip]
+    export_handle.spawn(async move {
+        if let Err(e) = out_cache.update_messages(msg_rx, write_rx, &output_client).await {
+            eprintln!("Error processing or writing files: {e}");
             return;
         }
     });
 
-    fetch_handle
-        .await
-        .map_err(|e| anyhow::anyhow!("Fetch task failed: {}", e))?;
+    // The message download task should be the first to finish.
+    // The message write task should be the last, I think.
+    // That's cuz the write task also has to download media... Maybe that should be separated? I
+    // don't know currently.
+    //
+    // Alternatively, media events could be separated from text...?
+    // As in: Download media even if write_rx is false.
+    // Files get stored in the OS temp directory after downloads, so they could wait, and on
+    // write signal, std::io::copy them. The temporary files are automatically deleted when their
+    // handle is dropped, here the function finishing.
+    while let Some(res) = export_handle.join_next().await {
+        match res {
+            Ok(_) => (),
+            Err(err) => eprintln!("Output task error: {err}")
+        }
+    }
 
     println!("{}: {}", name.bold(), "Export complete".bold().italic());
     anyhow::Ok(())

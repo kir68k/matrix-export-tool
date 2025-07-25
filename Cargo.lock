@@ -1675,6 +1675,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8935b44e7c13394a179a438e0cebba0fe08fe01b54f152e29a93b5cf993fd4"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -1810,12 +1811,14 @@ dependencies = [
  "anyhow",
  "config",
  "matrix-sdk",
+ "mime",
  "promkit",
  "promkit-derive",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
  "tracing-appender",
@@ -2046,6 +2049,7 @@ dependencies = [
  "async-trait",
  "deadpool-sqlite",
  "itertools 0.14.0",
+ "matrix-sdk-base",
  "matrix-sdk-crypto",
  "matrix-sdk-store-encryption",
  "num_cpus",

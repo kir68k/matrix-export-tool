@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
         let sync_client = client.clone();
         let sync_token = token.clone();
         tokio::task::spawn(async move {
+            // This client can't respond to messages :p
             let sync_settings = SyncSettings::new().set_presence(PresenceState::Unavailable);
 
             tokio::select! {
@@ -95,11 +96,12 @@ async fn main() -> anyhow::Result<()> {
         let mut export_tasks = JoinSet::new();
         for room_id in selected_rooms {
             let ref_cache = cache.clone();
+            let ref_client = main_client.clone();
             let room = main_client.get_room(&room_id).unwrap();
 
             #[rustfmt::skip]
             export_tasks.spawn(async move {
-                utils::export::export_room(room, ref_cache).await
+                utils::export::export_room(&ref_client, room, ref_cache).await
             });
         }
 

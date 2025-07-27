@@ -1,4 +1,4 @@
-use std::{env::temp_dir, path::PathBuf};
+use std::{env::temp_dir, io::Write as StdWrite, path::PathBuf, sync::{Arc, Mutex}};
 
 use anyhow::anyhow;
 use matrix_sdk::{
@@ -6,34 +6,68 @@ use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters},
     ruma::events::{self, room::message},
 };
-use tokio::{fs::OpenOptions, io::AsyncWriteExt};
-use tracing::Level;
+use std::fs::OpenOptions;
 
-/// Directory and filename for a media event
-#[derive(Clone)]
-pub struct FilePath {
-    media_dir: PathBuf,
-    filename: Option<String>,
+/// Temporary buffer for text messages.
+pub struct TextBufferInner {
+    pub lines: Vec<String>,
 }
 
-impl FilePath {
-    pub fn new(media_dir: PathBuf) -> Self {
+#[derive(Clone)]
+pub struct TextBuffer {
+    inner: Arc<Mutex<TextBufferInner>>,
+    pub file: PathBuf,
+}
+
+impl TextBufferInner {
+    fn new() -> Self {
         Self {
-            media_dir,
-            filename: None,
+            lines: Vec::new(),
+        }
+    }
+}
+
+impl TextBuffer {
+    pub fn new(file: impl Into<PathBuf>) -> Self {
+        let buf = Mutex::new(TextBufferInner::new());
+        Self {
+            inner: Arc::new(buf),
+            file: file.into(),
         }
     }
 
-    pub fn set_filename(&mut self, name: &str) {
-        self.filename.replace(name.to_string());
+    fn push_line(&self, line: String) {
+        let mut lock = self.inner.try_lock();
+        if let Ok(ref mut inner) = lock {
+            inner.lines.push(line);
+        } else {
+            tracing::error!("Couldn't get mutex lock for TextBufferInner.");
+        }
     }
 
-    fn join_paths(&self) -> PathBuf {
-        self.media_dir.join(self.filename())
-    }
+    pub fn write(&self) -> anyhow::Result<()> {
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.file)?;
 
-    fn filename(&self) -> String {
-        self.filename.clone().unwrap()
+        let mut lock = self.inner.lock();
+        match lock {
+            Ok(ref mut inner) => {
+                let output = std::mem::take(&mut inner.lines)
+                    .into_iter()
+                    .collect::<String>();
+
+                file.write_all(output.as_bytes())?;
+                file.flush()?;
+
+                anyhow::Ok(())
+            }
+            Err(e) => {
+                tracing::error!("TextBuffer::write | Mutex lock error: {e}");
+                anyhow::bail!("Mutex lock error: {e}");
+            }
+        }
     }
 }
 
@@ -47,7 +81,7 @@ where
     async fn process_event(
         &self,
         orig_ev: &events::OriginalMessageLikeEvent<C>,
-        text_path: &FilePath,
+        buffer: &TextBuffer,
     ) -> anyhow::Result<()>;
 }
 
@@ -58,47 +92,45 @@ where
     async fn process_event(
         &self,
         orig_ev: &events::OriginalMessageLikeEvent<C>,
-        text_path: &FilePath,
+        buffer: &TextBuffer,
     ) -> anyhow::Result<()> {
-        let text_file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(text_path.join_paths())
-            .await;
 
-        let formatted_msg = format!(
-            "{:?} - (in {}) {}: {}\n",
-            orig_ev.origin_server_ts, orig_ev.room_id, orig_ev.sender, self.body
+        let formatted = format!(
+            "{:?} - {}: {}\n",
+            orig_ev.origin_server_ts, orig_ev.sender, self.body
         );
 
-        match text_file {
-            Ok(mut file) => {
-                file.write_all(formatted_msg.as_bytes()).await?;
-                return anyhow::Ok(());
-            }
-            Err(e) => {
-                return Err(anyhow!("Error opening text file: {}", e));
-            }
-        }
+        buffer.push_line(formatted);
+
+        anyhow::Ok(())
     }
 }
 
 /// Trait for working with *decrypted* media events (e.g. images).
 ///
 /// Types implementing this are processed and sent for exporting.
-pub trait ValidMediaEvent {
-    async fn process_event(&self, client: &Client, media_path: &FilePath) -> anyhow::Result<()>;
+pub trait ValidMediaEvent<C>
+where
+    C: events::MessageLikeEventContent
+{
+    async fn process_event(
+        &self,
+        ev: &events::OriginalMessageLikeEvent<C>,
+        client: &Client,
+        media_dir: &PathBuf
+    ) -> anyhow::Result<()>;
 }
 
-impl ValidMediaEvent for message::FileMessageEventContent {
-    /// Take this event and process it in an appropriate way, making it ready for export.
-    ///
-    /// - `client`: The current client, used for downloading media.
-    ///
-    /// - `orig_ev`: The original event, for info not specific to this type.
-    ///
-    /// - `media_dir`: Room-specific media directory this writes to.
-    async fn process_event(&self, client: &Client, media_path: &FilePath) -> anyhow::Result<()> {
+impl<C> ValidMediaEvent<C> for message::FileMessageEventContent
+where
+    C: events::MessageLikeEventContent
+{
+    async fn process_event(
+        &self,
+        ev: &events::OriginalMessageLikeEvent<C>,
+        client: &Client,
+        media_dir: &PathBuf
+    ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
             format: MediaFormat::File,
@@ -113,7 +145,12 @@ impl ValidMediaEvent for message::FileMessageEventContent {
             .unwrap_or(&mime::APPLICATION_OCTET_STREAM.to_string()) // Needed.
             .parse::<mime::Mime>()?;
 
-        let res_path = media_path.join_paths();
+        let mut res_path = media_dir.join(self.filename());
+        if let Ok(true) = res_path.try_exists() {
+            let new = format!("{:?} - {}", ev.origin_server_ts, self.filename());
+            res_path.set_file_name(new);
+        }
+
         let temp_dir = Some(temp_dir().display().to_string());
         let request_handle = client
             .media()
@@ -129,38 +166,38 @@ impl ValidMediaEvent for message::FileMessageEventContent {
         match request_handle {
             Ok(handle) => match tokio::fs::copy(handle.path(), &res_path).await {
                 Ok(size) => {
-                    tracing::event!(
-                        Level::INFO,
-                        "Media: Saved file {} (size: {} KiB)",
+                    tracing::info!(
+                        "Media: Saved file {} to {} (size: {} KiB)",
                         self.filename(),
+                        &res_path.display(),
                         (size / 1024)
                     );
                     return anyhow::Ok(());
                 }
                 Err(e) => {
                     return Err(anyhow!(
-                        "Error copying from {} ---- {}",
-                        handle.path().display(),
-                        e
+                        "Error copying from {} ---- {e}",
+                        handle.path().display()
                     ));
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {}", e));
+                return Err(anyhow::anyhow!("Request handle error: {e}"));
             }
         }
     }
 }
 
-impl ValidMediaEvent for message::ImageMessageEventContent {
-    /// Take this event and process it in an appropriate way, making it ready for export.
-    ///
-    /// - `client`: The current client, used for downloading media.
-    ///
-    /// - `orig_ev`: The original event, for info not specific to this type.
-    ///
-    /// - `media_dir`: Room-specific media directory this writes to.
-    async fn process_event(&self, client: &Client, media_path: &FilePath) -> anyhow::Result<()> {
+impl<C> ValidMediaEvent<C> for message::ImageMessageEventContent
+where
+    C: events::MessageLikeEventContent
+{
+    async fn process_event(
+        &self,
+        ev: &events::OriginalMessageLikeEvent<C>,
+        client: &Client,
+        media_dir: &PathBuf
+    ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
             format: MediaFormat::File,
@@ -175,7 +212,12 @@ impl ValidMediaEvent for message::ImageMessageEventContent {
             .unwrap_or(&mime::APPLICATION_OCTET_STREAM.to_string()) // Needed.
             .parse::<mime::Mime>()?;
 
-        let res_path = media_path.join_paths();
+        let mut res_path = media_dir.join(self.filename());
+        if let Ok(true) = res_path.try_exists() {
+            let new = format!("{:?} - {}", ev.origin_server_ts, self.filename());
+            res_path.set_file_name(new);
+        }
+
         let temp_dir = Some(temp_dir().display().to_string());
         let request_handle = client
             .media()
@@ -191,38 +233,38 @@ impl ValidMediaEvent for message::ImageMessageEventContent {
         match request_handle {
             Ok(handle) => match tokio::fs::copy(handle.path(), &res_path).await {
                 Ok(size) => {
-                    tracing::event!(
-                        Level::INFO,
-                        "Media: Saved image {} (size: {} KiB)",
+                    tracing::info!(
+                        "Media: Saved image {} to {} (size: {} KiB)",
                         self.filename(),
+                        &res_path.display(),
                         (size / 1024)
                     );
                     return anyhow::Ok(());
                 }
                 Err(e) => {
                     return Err(anyhow!(
-                        "Error copying from {} ---- {}",
-                        handle.path().display(),
-                        e
+                        "Error copying from {} ---- {e}",
+                        handle.path().display()
                     ));
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {}", e));
+                return Err(anyhow::anyhow!("Request handle error: {e}"));
             }
         }
     }
 }
 
-impl ValidMediaEvent for message::VideoMessageEventContent {
-    /// Take this event and process it in an appropriate way, making it ready for export.
-    ///
-    /// - `client`: The current client, used for downloading media.
-    ///
-    /// - `orig_ev`: The original event, for info not specific to this type.
-    ///
-    /// - `media_dir`: Room-specific media directory this writes to.
-    async fn process_event(&self, client: &Client, media_path: &FilePath) -> anyhow::Result<()> {
+impl<C> ValidMediaEvent<C> for message::VideoMessageEventContent
+where
+    C: events::MessageLikeEventContent
+{
+    async fn process_event(
+        &self,
+        ev: &events::OriginalMessageLikeEvent<C>,
+        client: &Client,
+        media_dir: &PathBuf
+    ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
             format: MediaFormat::File,
@@ -237,7 +279,12 @@ impl ValidMediaEvent for message::VideoMessageEventContent {
             .unwrap_or(&mime::APPLICATION_OCTET_STREAM.to_string()) // Needed.
             .parse::<mime::Mime>()?;
 
-        let res_path = media_path.join_paths();
+        let mut res_path = media_dir.join(self.filename());
+        if let Ok(true) = res_path.try_exists() {
+            let new = format!("{:?} - {}", ev.origin_server_ts, self.filename());
+            res_path.set_file_name(new);
+        }
+
         let temp_dir = Some(temp_dir().display().to_string());
         let request_handle = client
             .media()
@@ -253,38 +300,38 @@ impl ValidMediaEvent for message::VideoMessageEventContent {
         match request_handle {
             Ok(handle) => match tokio::fs::copy(handle.path(), &res_path).await {
                 Ok(size) => {
-                    tracing::event!(
-                        Level::INFO,
-                        "Media: Saved video {} (size: {} KiB)",
+                    tracing::info!(
+                        "Media: Saved video {} to {} (size: {} KiB)",
                         self.filename(),
+                        &res_path.display(),
                         (size / 1024)
                     );
                     return anyhow::Ok(());
                 }
                 Err(e) => {
                     return Err(anyhow!(
-                        "Error copying from {} ---- {}",
-                        handle.path().display(),
-                        e
+                        "Error copying from {} ---- {e}",
+                        handle.path().display()
                     ));
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {}", e));
+                return Err(anyhow::anyhow!("Request handle error: {e}"));
             }
         }
     }
 }
 
-impl ValidMediaEvent for message::AudioMessageEventContent {
-    /// Take this event and process it in an appropriate way, making it ready for export.
-    ///
-    /// - `client`: The current client, used for downloading media.
-    ///
-    /// - `orig_ev`: The original event, for info not specific to this type.
-    ///
-    /// - `media_dir`: Room-specific media directory this writes to.
-    async fn process_event(&self, client: &Client, media_path: &FilePath) -> anyhow::Result<()> {
+impl<C> ValidMediaEvent<C> for message::AudioMessageEventContent
+where
+    C: events::MessageLikeEventContent
+{
+    async fn process_event(
+        &self,
+        ev: &events::OriginalMessageLikeEvent<C>,
+        client: &Client,
+        media_dir: &PathBuf
+    ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
             format: MediaFormat::File,
@@ -299,7 +346,12 @@ impl ValidMediaEvent for message::AudioMessageEventContent {
             .unwrap_or(&mime::APPLICATION_OCTET_STREAM.to_string()) // Needed.
             .parse::<mime::Mime>()?;
 
-        let res_path = media_path.join_paths();
+        let mut res_path = media_dir.join(self.filename());
+        if let Ok(true) = res_path.try_exists() {
+            let new = format!("{:?} - {}", ev.origin_server_ts, self.filename());
+            res_path.set_file_name(new);
+        }
+
         let temp_dir = Some(temp_dir().display().to_string());
         let request_handle = client
             .media()
@@ -315,24 +367,23 @@ impl ValidMediaEvent for message::AudioMessageEventContent {
         match request_handle {
             Ok(handle) => match tokio::fs::copy(handle.path(), &res_path).await {
                 Ok(size) => {
-                    tracing::event!(
-                        Level::INFO,
-                        "Media: Saved audio {} (size: {} KiB)",
+                    tracing::info!(
+                        "Media: Saved audio {} to {} (size: {} KiB)",
                         self.filename(),
+                        &res_path.display(),
                         (size / 1024)
                     );
                     return anyhow::Ok(());
                 }
                 Err(e) => {
                     return Err(anyhow!(
-                        "Error copying from {} ---- {}",
-                        handle.path().display(),
-                        e
+                        "Error copying from {} ---- {e}",
+                        handle.path().display()
                     ));
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {}", e));
+                return Err(anyhow::anyhow!("Request handle error: {e}"));
             }
         }
     }

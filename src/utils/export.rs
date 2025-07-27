@@ -104,11 +104,11 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     let name = room.display_name().await?.to_string();
 
     let room_cache = get_room(&cache, &room);
-    let mut out_cache = output_cache::FileCache::new(name.clone());
+    let mut out_cache = output_cache::FileCache::new(name.clone()).await?;
 
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
     let (room_cache_tx, room_cache_rx) = mpsc::channel::<String>(100);
-    let (write_tx, write_rx) = mpsc::channel::<bool>(100);
+    let (write_tx, write_rx) = mpsc::channel::<bool>(10);
 
     // Load a cached token, if one exists, or quit if marked done.
     let mut options = MessagesOptions::backward();
@@ -132,45 +132,28 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     // All export tasks.
     let mut export_handle = JoinSet::new();
 
-    // ----- these comments are here in case i forget :v -----
-    // Task #1: Event download
-    // This one takes all 3 mpsc senders, and sends to receivers in tasks #2-3.
+    // Download task
     export_handle.spawn(async move {
         if let Err(e) = fetch_chunks(room, options, room_cache_tx, msg_tx, write_tx).await {
             eprintln!("Couldn't fetch events: {e}");
             return;
         }
     });
-    // Task #2: Token cache
-    // This takes the token cache receiver itself, and handles it internally.
-    #[rustfmt::skip]
+    // Progress file/cache updates
     export_handle.spawn(async move {
         if let Err(e) = room_cache.update_token(room_cache_rx, &global_cache).await {
             eprintln!("Error updating export cache: {e}");
             return;
         }
     });
-    // Task #3: Process -> write events to files
-    // This takes the event & write receivers, and a cloned client.
-    // The write receiver just pokes FileCache to start exporting.
-    #[rustfmt::skip]
+    // Event processing
     export_handle.spawn(async move {
-        if let Err(e) = out_cache.update_messages(msg_rx, write_rx, &output_client).await {
+        if let Err(e) = out_cache.update_messages(msg_rx, write_rx, output_client).await {
             eprintln!("Error processing or writing files: {e}");
             return;
         }
     });
 
-    // The message download task should be the first to finish.
-    // The message write task should be the last, I think.
-    // That's cuz the write task also has to download media... Maybe that should be separated? I
-    // don't know currently.
-    //
-    // Alternatively, media events could be separated from text...?
-    // As in: Download media even if write_rx is false.
-    // Files get stored in the OS temp directory after downloads, so they could wait, and on
-    // write signal, std::io::copy them. The temporary files are automatically deleted when their
-    // handle is dropped, here the function finishing.
     while let Some(res) = export_handle.join_next().await {
         match res {
             Ok(_) => (),

@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::path::PathBuf;
 
 use matrix_sdk::{
     Client,
@@ -9,78 +9,122 @@ use matrix_sdk::{
     },
     stream::StreamExt,
 };
-use promkit::core::crossterm::{ExecutableCommand, cursor};
-use tokio::{fs::DirBuilder, sync::mpsc::Receiver};
-use tracing::Level;
+use tokio::{fs::{DirBuilder, OpenOptions}, sync::mpsc::Receiver};
 
-use crate::utils::traits::{FilePath, ValidEvent, ValidMediaEvent};
+use crate::utils::traits::{TextBuffer, ValidEvent, ValidMediaEvent};
 
 #[derive(Clone)]
 pub struct FileCache {
     user: String,
-    messages: Vec<TimelineEvent>,
+    dirs: WriteDirs,
+}
+
+#[derive(Clone, Debug)]
+struct WriteDirs {
+    user_dir: PathBuf,
+    text_dir: PathBuf,
+    media_dir: PathBuf,
+    text_file: PathBuf,
+}
+
+impl WriteDirs {
+    /// Create dirs and return their paths
+    async fn setup_files(user: &String) -> anyhow::Result<Self> {
+        let mut dir_builder = DirBuilder::new();
+        let user_dir = PathBuf::from(&user);
+        let (text_dir, media_dir) = (user_dir.join("text"), user_dir.join("media"));
+        let text_file = text_dir.join(format!("{} - messages", user)).with_extension("txt");
+
+        dir_builder.recursive(true).create(&text_dir).await?;
+        dir_builder.create(&media_dir).await?;
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&text_file).await?;
+
+        let media_types = ["Files", "Images", "Video", "Audio"];
+        for media in media_types {
+            dir_builder.create(&media_dir.join(media)).await?;
+        }
+
+        let dirs = Self { user_dir, text_dir, media_dir, text_file };
+
+        anyhow::Ok(dirs)
+    }
 }
 
 impl FileCache {
-    pub fn new(user: String) -> Self {
-        Self {
+    pub async fn new(user: String) -> anyhow::Result<Self> {
+        let dirs = WriteDirs::setup_files(&user).await?;
+        let cache = Self {
             user,
-            messages: Vec::new(),
-        }
+            dirs,
+        };
+        anyhow::Ok(cache)
     }
 
     pub async fn update_messages(
         &mut self,
         mut msg_rx: Receiver<Vec<TimelineEvent>>,
         mut write_rx: Receiver<bool>,
-        client: &Client,
+        client: Client,
     ) -> anyhow::Result<()> {
-        let mut buf_events = 0;
-        let mut process_handle = tokio::task::JoinSet::new();
+        let paths = self.dirs.clone();
+        let text_buffer = TextBuffer::new(&paths.text_file);
 
-        while let Some(mut new_events) = msg_rx.recv().await {
-            buf_events += &new_events.len();
-            stdout().execute(cursor::MoveDown(3))?;
-            println!("(cache) Saving {} events", buf_events);
-            stdout().execute(cursor::RestorePosition)?;
-
-            self.messages.append(&mut new_events);
+        while let Some(list) = msg_rx.recv().await {
+            Self::process_events(list, &paths.clone(), &text_buffer, &client.clone()).await;
 
             if let Ok(_) = write_rx.try_recv() {
-                buf_events = 0;
-                let mut cached_events = Vec::new();
-                std::mem::swap(&mut cached_events, &mut self.messages);
-
-                let cache = self.clone();
-                let client = client.clone();
-                process_handle
-                    .spawn(async move { cache.filter_types(cached_events, &client).await });
-            }
-        }
-
-        while let Some(res) = process_handle.join_next().await {
-            match res {
-                Ok(_) => (),
-                Err(err) => tracing::event!(Level::ERROR, "Event process/write task error: {err}"),
+                text_buffer.write().ok();
             }
         }
 
         anyhow::Ok(())
     }
 
-    async fn filter_types(
-        &self,
-        cached_events: Vec<TimelineEvent>,
-        client: &Client,
-    ) -> anyhow::Result<()> {
-        let text_dir = format!("./{}/text", self.user);
-        let media_dir = format!("./{}/media", self.user);
-        let mut builder = DirBuilder::new();
-        builder.recursive(true).create(&text_dir).await?;
-        builder.recursive(true).create(&media_dir).await?;
+    async fn process_events(list: Vec<TimelineEvent>, paths: &WriteDirs, buf: &TextBuffer, client: &Client) {
+        let filtered_events = Self::filter_events(list).await;
 
-        // Consumes the cached/swapped events, returns all non-redacted events.
-        let available_events = cached_events
+        // Text is processed separately from media, fyi:
+        // - Text: Sent to a buffer which waits for a write signal
+        // - Media: Downloads/writes immediately.
+        tokio_stream::iter(filtered_events).for_each_concurrent(None, |ev| async move {
+            let res = match ev.content.msgtype {
+                MessageType::Text(ref text) => {
+                    text.process_event(&ev, &buf.clone()).await
+                }
+                MessageType::File(ref file) => {
+                    file.process_event(&ev, &client.clone(), &paths.media_dir.join("Files")).await
+                }
+                MessageType::Image(ref image) => {
+                    image.process_event(&ev, &client.clone(), &paths.media_dir.join("Images")).await
+                }
+                MessageType::Video(ref video) => {
+                    video.process_event(&ev, &client.clone(), &paths.media_dir.join("Video")).await
+                }
+                MessageType::Audio(ref audio) => {
+                    audio.process_event(&ev, &client.clone(), &paths.media_dir.join("Audio")).await
+                }
+                _ => anyhow::Ok(()),
+            };
+
+            if let Err(e) = res {
+                tracing::error!(
+                    "{} | Err: {e} | Event ID: {} | Event timestamp: {:?}",
+                    ev.content.msgtype(),
+                    ev.event_id,
+                    ev.origin_server_ts
+                );
+            }
+        }).await;
+    }
+
+    /// Filters out redacted events from a list.
+    async fn filter_events (
+        list: Vec<TimelineEvent>
+    ) -> Vec<OriginalMessageLikeEvent<RoomMessageEventContent>> {
+        list
             .into_iter()
             .filter_map(|ev| match ev.kind {
                 TimelineEventKind::PlainText { event: plain } => plain
@@ -104,75 +148,6 @@ impl FileCache {
                     }),
                 _ => None,
             })
-            .collect::<Vec<OriginalMessageLikeEvent<RoomMessageEventContent>>>();
-
-        let stream = tokio_stream::iter(available_events).for_each(|ev| async move {
-            // I don't like this.
-            let mut text_path = FilePath::new(format!("{}/text", self.user).into());
-            let mut media_path = FilePath::new(format!("{}/media", self.user).into());
-
-            match ev.content.msgtype {
-                MessageType::Text(ref text) => {
-                    text_path.set_filename("text-export.txt");
-                    if let Err(e) = text.process_event(&ev, &text_path).await {
-                        tracing::event!(
-                            Level::ERROR,
-                            "MessageType::Text | Event ID: {} | Err: {e}",
-                            &ev.event_id
-                        );
-                    }
-                }
-                MessageType::File(ref file) => {
-                    media_path.set_filename(file.filename());
-                    if let Err(e) = file.process_event(&client.clone(), &media_path).await {
-                        tracing::event!(
-                            Level::ERROR,
-                            "MessageType::File | Event ID: {} | Err: {e}",
-                            &ev.event_id
-                        );
-                    }
-                }
-                MessageType::Image(ref image) => {
-                    media_path.set_filename(image.filename());
-                    if let Err(e) = image.process_event(&client.clone(), &media_path).await {
-                        tracing::event!(
-                            Level::ERROR,
-                            "MessageType::Image | Event ID: {} | Err: {e}",
-                            &ev.event_id
-                        );
-                    }
-                }
-                MessageType::Video(ref video) => {
-                    media_path.set_filename(video.filename());
-                    if let Err(e) = video.process_event(&client.clone(), &media_path).await {
-                        tracing::event!(
-                            Level::ERROR,
-                            "MessageType::Video | Event ID: {} | Err: {e}",
-                            &ev.event_id
-                        );
-                    }
-                }
-                MessageType::Audio(ref audio) => {
-                    media_path.set_filename(audio.filename());
-                    if let Err(e) = audio.process_event(&client.clone(), &media_path).await {
-                        tracing::event!(
-                            Level::ERROR,
-                            "MessageType::Audio | Event ID: {} | Err: {e}",
-                            &ev.event_id
-                        );
-                    }
-                }
-                MessageType::Emote(_)
-                | MessageType::Notice(_)
-                | MessageType::ServerNotice(_)
-                | MessageType::Location(_)
-                | MessageType::VerificationRequest(_)
-                | _ => (),
-            }
-        });
-
-        stream.await;
-
-        anyhow::Ok(())
+            .collect()
     }
 }

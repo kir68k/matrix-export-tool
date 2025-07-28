@@ -1,85 +1,167 @@
-use std::io::stdout;
+use std::{io::stdout, path::PathBuf};
 
 use matrix_sdk::{
+    Client,
     deserialized_responses::{TimelineEvent, TimelineEventKind},
-    ruma::events::{MessageLikeEvent, room::message::RoomMessageEvent},
+    ruma::events::{
+        MessageLikeEvent, OriginalMessageLikeEvent,
+        room::message::{MessageType, RoomMessageEvent, RoomMessageEventContent},
+    },
+    stream::StreamExt,
 };
-use promkit::crossterm::{ExecutableCommand, cursor};
-use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::mpsc::Receiver};
+use promkit::core::crossterm::{
+    ExecutableCommand, cursor,
+    terminal::{Clear, ClearType},
+};
+use tokio::{
+    fs::{DirBuilder, OpenOptions},
+    sync::mpsc::{self, Receiver},
+};
 
-//#[derive(Clone)]
+use crate::utils::traits::{ProcessableMediaEvent, ProcessableTextEvent, TextBuffer};
+
+#[derive(Clone)]
 pub struct FileCache {
     user: String,
-    messages: Vec<TimelineEvent>,
+    dirs: WriteDirs,
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteDirs {
+    //user_dir: PathBuf,
+    //text_dir: PathBuf,
+    media_dir: PathBuf,
+    text_file: PathBuf,
+}
+
+impl WriteDirs {
+    /// Create dirs and return their paths
+    async fn setup_files(user: &String) -> anyhow::Result<Self> {
+        let mut dir_builder = DirBuilder::new();
+        let user_dir = PathBuf::from(&user);
+        let (text_dir, media_dir) = (user_dir.join("text"), user_dir.join("media"));
+        let text_file = text_dir
+            .join(format!("{} - messages", user))
+            .with_extension("txt");
+
+        dir_builder.recursive(true).create(&text_dir).await?;
+        dir_builder.create(&media_dir).await?;
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&text_file)
+            .await?;
+
+        let media_types = ["Files", "Images", "Video", "Audio"];
+        for media in media_types {
+            dir_builder.create(&media_dir.join(media)).await?;
+        }
+
+        let dirs = Self {
+            media_dir,
+            text_file,
+        };
+
+        anyhow::Ok(dirs)
+    }
+
+    pub fn media_dir(&self) -> &PathBuf {
+        &self.media_dir
+    }
 }
 
 impl FileCache {
-    pub fn new(user: String) -> Self {
-        Self {
-            user,
-            messages: Vec::new(),
-        }
+    pub async fn new(user: String) -> anyhow::Result<Self> {
+        let dirs = WriteDirs::setup_files(&user).await?;
+        let cache = Self { user, dirs };
+        anyhow::Ok(cache)
     }
 
     pub async fn update_messages(
         &mut self,
         mut msg_rx: Receiver<Vec<TimelineEvent>>,
         mut write_rx: Receiver<bool>,
+        client: Client,
     ) -> anyhow::Result<()> {
-        let mut buf_events = 0;
+        let paths = self.dirs.clone();
+        let text_buffer = TextBuffer::new(&paths.text_file);
+        let mut media_buffer = Vec::new();
 
-        while let Some(mut new_events) = msg_rx.recv().await {
-            buf_events += &new_events.len();
-            stdout().execute(cursor::MoveDown(3))?;
-            println!("(cache) Caching {} messages", buf_events);
-            stdout().execute(cursor::RestorePosition)?;
+        while let Some(list) = msg_rx.recv().await {
+            let (text, mut media) = Self::split_event_types(list);
 
-            self.messages.append(&mut new_events);
+            // It's okay to directly process text here.
+            let text_buffer = &text_buffer.clone();
+            tokio_stream::iter(text)
+                .for_each_concurrent(None, |text_ev| async move {
+                    if let Err(e) = text_ev.send_to_process(&text_buffer).await {
+                        tracing::error!(
+                            "Message type: {} | Err: {e} | Event ID: {} | Event timestamp: {:?}",
+                            text_ev.content.msgtype(),
+                            text_ev.event_id,
+                            text_ev.origin_server_ts
+                        );
+                    }
+                })
+                .await;
+            media_buffer.append(&mut media);
 
             if let Ok(_) = write_rx.try_recv() {
-                buf_events = 0;
-                self.write_to_file().await?;
+                text_buffer.write().ok();
             }
         }
+
+        stdout().execute(Clear(ClearType::All))?;
+        stdout().execute(cursor::MoveTo(0, 1))?;
+        println!(
+            "Completed text export, downloading {} files (see logs)",
+            &media_buffer.len()
+        );
+        media_buffer.send_to_process(&client, &paths.clone()).await;
 
         anyhow::Ok(())
     }
 
-    async fn write_to_file(&mut self) -> anyhow::Result<()> {
-        let mut out_file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(format!("{}-export.txt", self.user))
-            .await?;
-
-        let mut messages = Vec::new();
-        std::mem::swap(&mut messages, &mut self.messages);
-
-        // At first I thought this is gonna be bad and slow
-        // turns out it's fine.
-        // I guess that's coz "With the encryption feature, messages are decrypted if possible" :D
-        let string: String = messages
+    /// This filters out redacted events, and returns two vectors with original events.
+    ///
+    /// The first vector is for text events, and the latter for all other events.
+    // TODO: Check whether this can be improved (return types).
+    fn split_event_types(
+        list: Vec<TimelineEvent>,
+    ) -> (
+        Vec<OriginalMessageLikeEvent<RoomMessageEventContent>>,
+        Vec<OriginalMessageLikeEvent<RoomMessageEventContent>>,
+    ) {
+        let (text, media): (Vec<_>, Vec<_>) = list
             .into_iter()
-            .map(|ev| {
-                if let TimelineEventKind::Decrypted(de) = &ev.kind
-                    && let Ok(MessageLikeEvent::Original(orig)) =
-                        de.event.deserialize_as::<RoomMessageEvent>()
-                {
-                    format!(
-                        "{:?} — {}: {}\n",
-                        orig.origin_server_ts,
-                        orig.sender,
-                        orig.content.body()
-                    )
-                } else {
-                    format!("Incorrect type.\n")
-                }
+            .filter_map(|ev| match ev.kind {
+                TimelineEventKind::PlainText { event: plain } => plain
+                    .deserialize_as::<RoomMessageEvent>()
+                    .ok()
+                    .and_then(|plain| {
+                        let MessageLikeEvent::Original(orig) = plain else {
+                            return None;
+                        };
+                        Some(orig)
+                    }),
+                TimelineEventKind::Decrypted(decrypted) => decrypted
+                    .event
+                    .deserialize_as::<RoomMessageEvent>()
+                    .ok()
+                    .and_then(|de| {
+                        let MessageLikeEvent::Original(orig) = de else {
+                            return None;
+                        };
+                        Some(orig)
+                    }),
+                _ => None,
             })
-            .collect();
+            .partition(|ev| match ev.content.msgtype {
+                // Text is handled separately from media.
+                MessageType::Text(_) => return true,
+                _ => return false,
+            });
 
-        out_file.write(string.as_bytes()).await?;
-        out_file.flush().await?;
-
-        anyhow::Ok(())
+        return (text, media);
     }
 }

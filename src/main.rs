@@ -1,7 +1,7 @@
 mod cli;
 mod utils;
 
-use std::time::Duration;
+use std::{io::stdout, time::Duration};
 
 use cli::interface::UserInfo;
 use cli::prompts;
@@ -9,7 +9,11 @@ use cli::prompts;
 use config::Config;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::presence::PresenceState;
-use promkit::crossterm::style::Stylize;
+use promkit::core::crossterm::{
+    ExecutableCommand, cursor,
+    style::Stylize,
+    terminal::{Clear, ClearType},
+};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use utils::cache::user_cache::ExportCache;
@@ -22,7 +26,7 @@ use utils::cache::user_cache::ExportCache;
 const P_DELAY: Duration = Duration::from_millis(750);
 
 /// Load user config, either by prompt or config file
-fn load_config() -> anyhow::Result<UserInfo> {
+async fn load_config() -> anyhow::Result<UserInfo> {
     let settings = Config::builder()
         .add_source(config::File::with_name("./met-config.toml"))
         .add_source(config::Environment::with_prefix("MET"))
@@ -37,7 +41,7 @@ fn load_config() -> anyhow::Result<UserInfo> {
         println!("{}", "Config not found, prompting.".yellow());
         std::thread::sleep(P_DELAY);
 
-        return UserInfo::from_prompt();
+        return UserInfo::from_prompt().await;
     }
 }
 
@@ -51,13 +55,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let token = CancellationToken::new();
-    let user = load_config()?;
+    let user = load_config().await?;
     let client = utils::client::login(&user).await?;
 
     {
         let sync_client = client.clone();
         let sync_token = token.clone();
         tokio::task::spawn(async move {
+            // This client can't respond to messages :p
             let sync_settings = SyncSettings::new().set_presence(PresenceState::Unavailable);
 
             tokio::select! {
@@ -95,11 +100,12 @@ async fn main() -> anyhow::Result<()> {
         let mut export_tasks = JoinSet::new();
         for room_id in selected_rooms {
             let ref_cache = cache.clone();
+            let ref_client = main_client.clone();
             let room = main_client.get_room(&room_id).unwrap();
 
             #[rustfmt::skip]
             export_tasks.spawn(async move {
-                utils::export::export_room(room, ref_cache).await
+                utils::export::export_room(&ref_client, room, ref_cache).await
             });
         }
 
@@ -136,6 +142,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // clear terminal
+    stdout().execute(Clear(ClearType::All))?;
+    stdout().execute(Clear(ClearType::Purge))?;
+    stdout().execute(cursor::MoveTo(0, 0))?;
     println!("{}", "Logging out...".yellow().italic());
     match client.logout().await {
         Ok(_) => println!("{}", "Logged out".italic().green()),

@@ -106,6 +106,7 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     let room_cache = get_room(&cache, &room);
     let mut out_cache = output_cache::FileCache::new(name.clone()).await?;
 
+    // TODO: Check whether streams are more suitable here.
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<TimelineEvent>>(100);
     let (room_cache_tx, room_cache_rx) = mpsc::channel::<String>(100);
     let (write_tx, write_rx) = mpsc::channel::<bool>(10);
@@ -148,7 +149,10 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     });
     // Event processing
     export_handle.spawn(async move {
-        if let Err(e) = out_cache.update_messages(msg_rx, write_rx, output_client).await {
+        if let Err(e) = out_cache
+            .update_messages(msg_rx, write_rx, output_client)
+            .await
+        {
             eprintln!("Error processing or writing files: {e}");
             return;
         }
@@ -161,6 +165,5 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
         }
     }
 
-    println!("{}: {}", name.bold(), "Export complete".bold().italic());
     anyhow::Ok(())
 }

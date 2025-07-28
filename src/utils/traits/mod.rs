@@ -1,12 +1,25 @@
-use std::{env::temp_dir, io::Write as StdWrite, path::PathBuf, sync::{Arc, Mutex}};
+use std::{
+    env::temp_dir,
+    io::Write as StdWrite,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::anyhow;
 use matrix_sdk::{
     Client,
     media::{MediaFormat, MediaRequestParameters},
     ruma::events::{self, room::message},
+    stream::StreamExt,
 };
 use std::fs::OpenOptions;
+
+use super::cache::output_cache::WriteDirs;
+
+/// How many files to concurrently download.
+///
+/// This *should* get around any rate limits.
+const MEDIA_DOWNLOAD_RATE: usize = 4;
 
 /// Temporary buffer for text messages.
 pub struct TextBufferInner {
@@ -21,9 +34,7 @@ pub struct TextBuffer {
 
 impl TextBufferInner {
     fn new() -> Self {
-        Self {
-            lines: Vec::new(),
-        }
+        Self { lines: Vec::new() }
     }
 }
 
@@ -71,6 +82,80 @@ impl TextBuffer {
     }
 }
 
+pub trait ProcessableTextEvent {
+    async fn send_to_process(&self, buffer: &TextBuffer) -> anyhow::Result<()>;
+}
+
+impl ProcessableTextEvent for message::OriginalRoomMessageEvent {
+    async fn send_to_process(&self, buffer: &TextBuffer) -> anyhow::Result<()> {
+        match &self.content.msgtype {
+            message::MessageType::Text(text) => text.process_event(&self, &buffer.clone()).await,
+            _ => anyhow::Ok(()),
+        }
+    }
+}
+
+pub trait ProcessableMediaEvent {
+    async fn send_to_process(&self, client: &Client, dir: &WriteDirs);
+}
+
+impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
+    async fn send_to_process(&self, client: &Client, dir: &WriteDirs) {
+        tracing::info!("Downloading {} media files.", self.len());
+        tokio_stream::iter(self)
+            .for_each_concurrent(MEDIA_DOWNLOAD_RATE, |ev| async move {
+                let res = match ev.content.msgtype {
+                    message::MessageType::File(ref file) => {
+                        tracing::info!(
+                            "Media: Received file {}, starting download.",
+                            file.filename()
+                        );
+                        file.process_event(&ev, &client.clone(), &dir.media_dir().join("Files"))
+                            .await
+                    }
+                    message::MessageType::Image(ref image) => {
+                        tracing::info!(
+                            "Media: Received image {}, starting download.",
+                            image.filename()
+                        );
+                        image
+                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Images"))
+                            .await
+                    }
+                    message::MessageType::Video(ref video) => {
+                        tracing::info!(
+                            "Media: Received video {}, starting download.",
+                            video.filename()
+                        );
+                        video
+                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Video"))
+                            .await
+                    }
+                    message::MessageType::Audio(ref audio) => {
+                        tracing::info!(
+                            "Media: Received audio {}, starting download.",
+                            audio.filename()
+                        );
+                        audio
+                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Audio"))
+                            .await
+                    }
+                    _ => anyhow::Ok(()),
+                };
+
+                if let Err(e) = res {
+                    tracing::error!(
+                        "Message type: {} | Err: {e} | Event ID: {} | Event timestamp: {:?}",
+                        ev.content.msgtype(),
+                        ev.event_id,
+                        ev.origin_server_ts
+                    );
+                }
+            })
+            .await;
+    }
+}
+
 /// Trait for working with *decrypted* text (or text-like) events.
 ///
 /// Types implementing this are processed and sent for exporting.
@@ -94,7 +179,6 @@ where
         orig_ev: &events::OriginalMessageLikeEvent<C>,
         buffer: &TextBuffer,
     ) -> anyhow::Result<()> {
-
         let formatted = format!(
             "{:?} - {}: {}\n",
             orig_ev.origin_server_ts, orig_ev.sender, self.body
@@ -111,25 +195,25 @@ where
 /// Types implementing this are processed and sent for exporting.
 pub trait ValidMediaEvent<C>
 where
-    C: events::MessageLikeEventContent
+    C: events::MessageLikeEventContent,
 {
     async fn process_event(
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf
+        media_dir: &PathBuf,
     ) -> anyhow::Result<()>;
 }
 
 impl<C> ValidMediaEvent<C> for message::FileMessageEventContent
 where
-    C: events::MessageLikeEventContent
+    C: events::MessageLikeEventContent,
 {
     async fn process_event(
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf
+        media_dir: &PathBuf,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -190,13 +274,13 @@ where
 
 impl<C> ValidMediaEvent<C> for message::ImageMessageEventContent
 where
-    C: events::MessageLikeEventContent
+    C: events::MessageLikeEventContent,
 {
     async fn process_event(
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf
+        media_dir: &PathBuf,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -257,13 +341,13 @@ where
 
 impl<C> ValidMediaEvent<C> for message::VideoMessageEventContent
 where
-    C: events::MessageLikeEventContent
+    C: events::MessageLikeEventContent,
 {
     async fn process_event(
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf
+        media_dir: &PathBuf,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -324,13 +408,13 @@ where
 
 impl<C> ValidMediaEvent<C> for message::AudioMessageEventContent
 where
-    C: events::MessageLikeEventContent
+    C: events::MessageLikeEventContent,
 {
     async fn process_event(
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf
+        media_dir: &PathBuf,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),

@@ -136,7 +136,7 @@ impl FileCache {
             .into_iter()
             .filter_map(|ev| match ev.kind {
                 TimelineEventKind::PlainText { event: plain } => plain
-                    .deserialize_as::<RoomMessageEvent>()
+                    .deserialize_as_unchecked::<RoomMessageEvent>()
                     .ok()
                     .and_then(|plain| {
                         let MessageLikeEvent::Original(orig) = plain else {
@@ -146,7 +146,7 @@ impl FileCache {
                     }),
                 TimelineEventKind::Decrypted(decrypted) => decrypted
                     .event
-                    .deserialize_as::<RoomMessageEvent>()
+                    .deserialize_as_unchecked::<RoomMessageEvent>()
                     .ok()
                     .and_then(|de| {
                         let MessageLikeEvent::Original(orig) = de else {

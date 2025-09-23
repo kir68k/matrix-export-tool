@@ -1,14 +1,14 @@
 [package]
 name = "matrix-export-tool"
 authors = ["Kirin Etheridge <revelation@krxt.dev>"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "ISC"
 
 [dependencies]
 anyhow = "1.0"
 config = { version = "0.15", features = ["toml"] }
-matrix-sdk = { version = "0.13", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls", "qrcode"] }
+matrix-sdk = { version = "0.14", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls", "qrcode"] }
 mime = "0.3"
 promkit = { version = "0.10", features = ["all"] }
 promkit-derive = "0.2"

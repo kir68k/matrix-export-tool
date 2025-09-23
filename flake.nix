@@ -65,6 +65,7 @@
           # from the toolchain that was specified earlier.
           packages =
             [
+              pkgs.cargo-edit
             ];
         };
       }

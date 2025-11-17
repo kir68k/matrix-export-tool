@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::Receiver;
 
 /// File name for the cache.
-const CACHE_FILE: &'static str = "met-cache.json";
+const CACHE_FILE: &str = "met-cache.json";
 
 /// A dummy token. If this is set, the export is skipped.
 // FIXME: This should be its own field in the cache. This works for now,
 // but later mby keep the last token, and turn this field to `true`.
-pub const CACHE_DONE: &'static str = "export_completed";
+pub const CACHE_DONE: &str = "export_completed";
 
 /// Main struct for cache data
 ///
@@ -49,9 +49,7 @@ pub(crate) struct ExportCacheInner {
 
 impl ExportCacheInner {
     fn new() -> Self {
-        let cache = Self { rooms: Vec::new() };
-
-        cache
+        Self { rooms: Vec::new() }
     }
 }
 
@@ -113,7 +111,7 @@ impl ExportCache {
             match serde_json::from_str::<Self>(&file) {
                 Ok(cache) => {
                     println!("{}", "Cache file recovered.".green());
-                    return cache;
+                    cache
                 }
                 Err(e) => {
                     println!(
@@ -123,12 +121,12 @@ impl ExportCache {
                         e,
                         "Making a new cache in memory instead.".white()
                     );
-                    return Self::new();
+                    Self::new()
                 }
             }
         } else {
             println!("{}", "Cache file not found, making a new one.".white());
-            return Self::new();
+            Self::new()
         }
     }
 }

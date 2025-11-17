@@ -15,7 +15,7 @@ use promkit::core::crossterm::{
 };
 use tokio::{
     fs::{DirBuilder, OpenOptions},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::Receiver,
 };
 
 use crate::utils::traits::{ProcessableMediaEvent, ProcessableTextEvent, TextBuffer};
@@ -94,7 +94,7 @@ impl FileCache {
             let text_buffer = &text_buffer.clone();
             tokio_stream::iter(text)
                 .for_each_concurrent(None, |text_ev| async move {
-                    if let Err(e) = text_ev.send_to_process(&text_buffer).await {
+                    if let Err(e) = text_ev.send_to_process(text_buffer).await {
                         tracing::error!(
                             "Message type: {} | Err: {e} | Event ID: {} | Event timestamp: {:?}",
                             text_ev.content.msgtype(),
@@ -106,7 +106,7 @@ impl FileCache {
                 .await;
             media_buffer.append(&mut media);
 
-            if let Ok(_) = write_rx.try_recv() {
+            if write_rx.try_recv().is_ok() {
                 text_buffer.write().ok();
             }
         }
@@ -158,10 +158,10 @@ impl FileCache {
             })
             .partition(|ev| match ev.content.msgtype {
                 // Text is handled separately from media.
-                MessageType::Text(_) => return true,
-                _ => return false,
+                MessageType::Text(_) => true,
+                _ => false,
             });
 
-        return (text, media);
+        (text, media)
     }
 }

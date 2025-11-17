@@ -89,7 +89,7 @@ pub trait ProcessableTextEvent {
 impl ProcessableTextEvent for message::OriginalRoomMessageEvent {
     async fn send_to_process(&self, buffer: &TextBuffer) -> anyhow::Result<()> {
         match &self.content.msgtype {
-            message::MessageType::Text(text) => text.process_event(&self, &buffer.clone()).await,
+            message::MessageType::Text(text) => text.process_event(self, &buffer.clone()).await,
             _ => anyhow::Ok(()),
         }
     }
@@ -110,7 +110,7 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
                             "Media: Received file {}, starting download.",
                             file.filename()
                         );
-                        file.process_event(&ev, &client.clone(), &dir.media_dir().join("Files"))
+                        file.process_event(ev, &client.clone(), &dir.media_dir().join("Files"))
                             .await
                     }
                     message::MessageType::Image(ref image) => {
@@ -119,7 +119,7 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
                             image.filename()
                         );
                         image
-                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Images"))
+                            .process_event(ev, &client.clone(), &dir.media_dir().join("Images"))
                             .await
                     }
                     message::MessageType::Video(ref video) => {
@@ -128,7 +128,7 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
                             video.filename()
                         );
                         video
-                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Video"))
+                            .process_event(ev, &client.clone(), &dir.media_dir().join("Video"))
                             .await
                     }
                     message::MessageType::Audio(ref audio) => {
@@ -137,7 +137,7 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
                             audio.filename()
                         );
                         audio
-                            .process_event(&ev, &client.clone(), &dir.media_dir().join("Audio"))
+                            .process_event(ev, &client.clone(), &dir.media_dir().join("Audio"))
                             .await
                     }
                     _ => anyhow::Ok(()),
@@ -201,7 +201,7 @@ where
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
     ) -> anyhow::Result<()>;
 }
 
@@ -213,7 +213,7 @@ where
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -256,17 +256,17 @@ where
                         &res_path.display(),
                         (size / 1024)
                     );
-                    return anyhow::Ok(());
+                    anyhow::Ok(())
                 }
                 Err(e) => {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "Error copying from {} ---- {e}",
                         handle.path().display()
-                    ));
+                    ))
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {e}"));
+                Err(anyhow::anyhow!("Request handle error: {e}"))
             }
         }
     }
@@ -280,7 +280,7 @@ where
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -323,17 +323,17 @@ where
                         &res_path.display(),
                         (size / 1024)
                     );
-                    return anyhow::Ok(());
+                    anyhow::Ok(())
                 }
                 Err(e) => {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "Error copying from {} ---- {e}",
                         handle.path().display()
-                    ));
+                    ))
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {e}"));
+                Err(anyhow::anyhow!("Request handle error: {e}"))
             }
         }
     }
@@ -347,7 +347,7 @@ where
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -390,17 +390,17 @@ where
                         &res_path.display(),
                         (size / 1024)
                     );
-                    return anyhow::Ok(());
+                    anyhow::Ok(())
                 }
                 Err(e) => {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "Error copying from {} ---- {e}",
                         handle.path().display()
-                    ));
+                    ))
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {e}"));
+                Err(anyhow::anyhow!("Request handle error: {e}"))
             }
         }
     }
@@ -414,7 +414,7 @@ where
         &self,
         ev: &events::OriginalMessageLikeEvent<C>,
         client: &Client,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
         let request = MediaRequestParameters {
             source: self.source.clone(),
@@ -457,17 +457,17 @@ where
                         &res_path.display(),
                         (size / 1024)
                     );
-                    return anyhow::Ok(());
+                    anyhow::Ok(())
                 }
                 Err(e) => {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "Error copying from {} ---- {e}",
                         handle.path().display()
-                    ));
+                    ))
                 }
             },
             Err(e) => {
-                return Err(anyhow::anyhow!("Request handle error: {e}"));
+                Err(anyhow::anyhow!("Request handle error: {e}"))
             }
         }
     }

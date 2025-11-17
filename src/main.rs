@@ -36,12 +36,12 @@ async fn load_config() -> anyhow::Result<UserInfo> {
         println!("{}", "Loading from config, skipping prompt.".yellow());
         std::thread::sleep(P_DELAY);
 
-        return UserInfo::from_config(file);
+        UserInfo::from_config(file)
     } else {
         println!("{}", "Config not found, prompting.".yellow());
         std::thread::sleep(P_DELAY);
 
-        return UserInfo::from_prompt().await;
+        UserInfo::from_prompt().await
     }
 }
 

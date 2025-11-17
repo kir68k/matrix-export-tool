@@ -28,12 +28,12 @@ fn get_room(cache: &ExportCache, room: &Room) -> RoomExportCache {
         .iter()
         .find(|cached| cached.room_id().unwrap() == &room_id)
     {
-        return room.clone();
+        room.clone()
     } else {
         let mut room = RoomExportCache::default();
         room.add_room_data(room_id, name, None).add_to_global(cache);
 
-        return room;
+        room
     }
 }
 
@@ -75,7 +75,7 @@ async fn fetch_chunks(
         );
         stdout().execute(cursor::RestorePosition)?;
 
-        if let Err(_) = msg_tx.send(chunk).await {
+        if (msg_tx.send(chunk).await).is_err() {
             break;
         }
 
@@ -137,14 +137,12 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
     export_handle.spawn(async move {
         if let Err(e) = fetch_chunks(room, options, room_cache_tx, msg_tx, write_tx).await {
             eprintln!("Couldn't fetch events: {e}");
-            return;
         }
     });
     // Progress file/cache updates
     export_handle.spawn(async move {
         if let Err(e) = room_cache.update_token(room_cache_rx, &global_cache).await {
             eprintln!("Error updating export cache: {e}");
-            return;
         }
     });
     // Event processing
@@ -154,7 +152,6 @@ pub async fn export_room(client: &Client, room: Room, cache: ExportCache) -> any
             .await
         {
             eprintln!("Error processing or writing files: {e}");
-            return;
         }
     });
 

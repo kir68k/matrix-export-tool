@@ -2,6 +2,7 @@ mod cli;
 mod utils;
 
 use std::{io::stdout, time::Duration};
+use std::io::{self, Write};
 
 use cli::interface::UserInfo;
 use cli::prompts;
@@ -77,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let main_task: JoinHandle<anyhow::Result<()>> = tokio::task::spawn(async move {
         // Import E2EE keys
         println!("Importing keys...");
-        let keys = main_client
+        let mut keys = main_client
             .encryption()
             .import_room_keys((&user.keys_file).into(), &user.keys_pass)
             .await?;
@@ -85,6 +86,24 @@ async fn main() -> anyhow::Result<()> {
             "Imported {} keys out of {}",
             keys.imported_count, keys.total_count
         );
+
+        // quick hack for testing, should be kept but improved.
+        print!("Additional key files (comma-separated, Enter to skip): ");
+        io::stdout().flush().ok();
+        let mut extra = String::new();
+        if io::stdin().read_line(&mut extra).is_ok() {
+            for path in extra.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let res = main_client
+                    .encryption()
+                    .import_room_keys(path.into(), &user.keys_pass)
+                    .await?;
+                keys.imported_count += res.imported_count;
+                keys.total_count += res.total_count;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+        }
+
+        println!("Imported {} keys out of {} (including duplicates)", keys.imported_count, keys.total_count);
 
         println!("Verifying client...");
         if !utils::client::verify_client(&main_client).await? {

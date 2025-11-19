@@ -19,7 +19,7 @@ use super::cache::output_cache::WriteDirs;
 /// How many files to concurrently download.
 ///
 /// This *should* get around any rate limits.
-const MEDIA_DOWNLOAD_RATE: usize = 2;
+const MEDIA_DOWNLOAD_RATE: usize = 4;
 
 /// Temporary buffer for text messages.
 pub struct TextBufferInner {
@@ -151,6 +151,8 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
                         ev.origin_server_ts
                     );
                 }
+
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             })
             .await;
     }

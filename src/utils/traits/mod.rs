@@ -19,7 +19,7 @@ use super::cache::output_cache::WriteDirs;
 /// How many files to concurrently download.
 ///
 /// This *should* get around any rate limits.
-const MEDIA_DOWNLOAD_RATE: usize = 4;
+const MEDIA_DOWNLOAD_RATE: usize = 2;
 
 /// Temporary buffer for text messages.
 pub struct TextBufferInner {
@@ -258,16 +258,12 @@ where
                     );
                     anyhow::Ok(())
                 }
-                Err(e) => {
-                    Err(anyhow!(
-                        "Error copying from {} ---- {e}",
-                        handle.path().display()
-                    ))
-                }
+                Err(e) => Err(anyhow!(
+                    "Error copying from {} ---- {e}",
+                    handle.path().display()
+                )),
             },
-            Err(e) => {
-                Err(anyhow::anyhow!("Request handle error: {e}"))
-            }
+            Err(e) => Err(anyhow::anyhow!("Request handle error: {e}")),
         }
     }
 }
@@ -325,16 +321,12 @@ where
                     );
                     anyhow::Ok(())
                 }
-                Err(e) => {
-                    Err(anyhow!(
-                        "Error copying from {} ---- {e}",
-                        handle.path().display()
-                    ))
-                }
+                Err(e) => Err(anyhow!(
+                    "Error copying from {} ---- {e}",
+                    handle.path().display()
+                )),
             },
-            Err(e) => {
-                Err(anyhow::anyhow!("Request handle error: {e}"))
-            }
+            Err(e) => Err(anyhow::anyhow!("Request handle error: {e}")),
         }
     }
 }
@@ -392,16 +384,12 @@ where
                     );
                     anyhow::Ok(())
                 }
-                Err(e) => {
-                    Err(anyhow!(
-                        "Error copying from {} ---- {e}",
-                        handle.path().display()
-                    ))
-                }
+                Err(e) => Err(anyhow!(
+                    "Error copying from {} ---- {e}",
+                    handle.path().display()
+                )),
             },
-            Err(e) => {
-                Err(anyhow::anyhow!("Request handle error: {e}"))
-            }
+            Err(e) => Err(anyhow::anyhow!("Request handle error: {e}")),
         }
     }
 }
@@ -459,16 +447,12 @@ where
                     );
                     anyhow::Ok(())
                 }
-                Err(e) => {
-                    Err(anyhow!(
-                        "Error copying from {} ---- {e}",
-                        handle.path().display()
-                    ))
-                }
+                Err(e) => Err(anyhow!(
+                    "Error copying from {} ---- {e}",
+                    handle.path().display()
+                )),
             },
-            Err(e) => {
-                Err(anyhow::anyhow!("Request handle error: {e}"))
-            }
+            Err(e) => Err(anyhow::anyhow!("Request handle error: {e}")),
         }
     }
 }

@@ -13,6 +13,7 @@ mime = "0.3"
 promkit = { version = "0.10", features = ["all"] }
 promkit-derive = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls", "system-proxy"] }
+ron = "0.12.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }

@@ -93,13 +93,17 @@ async fn main() -> anyhow::Result<()> {
         let mut extra = String::new();
         if io::stdin().read_line(&mut extra).is_ok() {
             for path in extra.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let p = promkit::preset::password::Password::default()
+                    .title(format!("Password for {}", path))
+                    .run()
+                    .await?;
+
                 let res = main_client
                     .encryption()
-                    .import_room_keys(path.into(), &user.keys_pass)
+                    .import_room_keys(path.into(), p.as_ref())
                     .await?;
                 keys.imported_count += res.imported_count;
                 keys.total_count += res.total_count;
-                tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }
 

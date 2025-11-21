@@ -9,7 +9,7 @@ use anyhow::anyhow;
 use matrix_sdk::{
     Client,
     media::{MediaFormat, MediaRequestParameters},
-    ruma::events::{self, room::message},
+    ruma::events::room::message,
     stream::StreamExt,
 };
 use std::fs::OpenOptions;
@@ -19,7 +19,7 @@ use super::cache::output_cache::WriteDirs;
 /// How many files to concurrently download.
 ///
 /// This *should* get around any rate limits.
-const MEDIA_DOWNLOAD_RATE: usize = 4;
+const MEDIA_DOWNLOAD_RATE: usize = 8;
 
 /// Temporary buffer for text messages.
 pub struct TextBufferInner {
@@ -86,7 +86,7 @@ pub trait ProcessableTextEvent {
     async fn send_to_process(&self, buffer: &TextBuffer) -> anyhow::Result<()>;
 }
 
-impl ProcessableTextEvent for message::OriginalRoomMessageEvent {
+impl ProcessableTextEvent for message::OriginalSyncRoomMessageEvent {
     async fn send_to_process(&self, buffer: &TextBuffer) -> anyhow::Result<()> {
         match &self.content.msgtype {
             message::MessageType::Text(text) => text.process_event(self, &buffer.clone()).await,
@@ -99,7 +99,7 @@ pub trait ProcessableMediaEvent {
     async fn send_to_process(&self, client: &Client, dir: &WriteDirs);
 }
 
-impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
+impl ProcessableMediaEvent for Vec<message::OriginalSyncRoomMessageEvent> {
     async fn send_to_process(&self, client: &Client, dir: &WriteDirs) {
         tracing::info!("Downloading {} media files.", self.len());
         tokio_stream::iter(self)
@@ -161,24 +161,18 @@ impl ProcessableMediaEvent for Vec<message::OriginalRoomMessageEvent> {
 /// Trait for working with *decrypted* text (or text-like) events.
 ///
 /// Types implementing this are processed and sent for exporting.
-pub trait ValidEvent<C>
-where
-    C: events::MessageLikeEventContent,
-{
+pub trait ValidEvent {
     async fn process_event(
         &self,
-        orig_ev: &events::OriginalMessageLikeEvent<C>,
+        orig_ev: &message::OriginalSyncRoomMessageEvent,
         buffer: &TextBuffer,
     ) -> anyhow::Result<()>;
 }
 
-impl<C> ValidEvent<C> for message::TextMessageEventContent
-where
-    C: events::MessageLikeEventContent,
-{
+impl ValidEvent for message::TextMessageEventContent {
     async fn process_event(
         &self,
-        orig_ev: &events::OriginalMessageLikeEvent<C>,
+        orig_ev: &message::OriginalSyncRoomMessageEvent,
         buffer: &TextBuffer,
     ) -> anyhow::Result<()> {
         let formatted = format!(
@@ -195,25 +189,19 @@ where
 /// Trait for working with *decrypted* media events (e.g. images).
 ///
 /// Types implementing this are processed and sent for exporting.
-pub trait ValidMediaEvent<C>
-where
-    C: events::MessageLikeEventContent,
-{
+pub trait ValidMediaEvent {
     async fn process_event(
         &self,
-        ev: &events::OriginalMessageLikeEvent<C>,
+        ev: &message::OriginalSyncRoomMessageEvent,
         client: &Client,
         media_dir: &std::path::Path,
     ) -> anyhow::Result<()>;
 }
 
-impl<C> ValidMediaEvent<C> for message::FileMessageEventContent
-where
-    C: events::MessageLikeEventContent,
-{
+impl ValidMediaEvent for message::FileMessageEventContent {
     async fn process_event(
         &self,
-        ev: &events::OriginalMessageLikeEvent<C>,
+        ev: &message::OriginalSyncRoomMessageEvent,
         client: &Client,
         media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
@@ -270,13 +258,10 @@ where
     }
 }
 
-impl<C> ValidMediaEvent<C> for message::ImageMessageEventContent
-where
-    C: events::MessageLikeEventContent,
-{
+impl ValidMediaEvent for message::ImageMessageEventContent {
     async fn process_event(
         &self,
-        ev: &events::OriginalMessageLikeEvent<C>,
+        ev: &message::OriginalSyncRoomMessageEvent,
         client: &Client,
         media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
@@ -333,13 +318,10 @@ where
     }
 }
 
-impl<C> ValidMediaEvent<C> for message::VideoMessageEventContent
-where
-    C: events::MessageLikeEventContent,
-{
+impl ValidMediaEvent for message::VideoMessageEventContent {
     async fn process_event(
         &self,
-        ev: &events::OriginalMessageLikeEvent<C>,
+        ev: &message::OriginalSyncRoomMessageEvent,
         client: &Client,
         media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {
@@ -396,13 +378,10 @@ where
     }
 }
 
-impl<C> ValidMediaEvent<C> for message::AudioMessageEventContent
-where
-    C: events::MessageLikeEventContent,
-{
+impl ValidMediaEvent for message::AudioMessageEventContent {
     async fn process_event(
         &self,
-        ev: &events::OriginalMessageLikeEvent<C>,
+        ev: &message::OriginalSyncRoomMessageEvent,
         client: &Client,
         media_dir: &std::path::Path,
     ) -> anyhow::Result<()> {

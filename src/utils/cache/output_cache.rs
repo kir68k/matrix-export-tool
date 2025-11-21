@@ -9,11 +9,9 @@ use matrix_sdk::{
     Client,
     deserialized_responses::{TimelineEvent, TimelineEventKind},
     ruma::events::{
-        MessageLikeEvent,
-        room::{
-            encrypted::{OriginalRoomEncryptedEvent, RoomEncryptedEvent},
-            message::{MessageType, OriginalRoomMessageEvent, RoomMessageEvent},
-        },
+        AnyMessageLikeEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent, AnyTimelineEvent,
+        SyncMessageLikeEvent,
+        room::message::{MessageType, OriginalSyncRoomMessageEvent},
     },
     stream::StreamExt,
 };
@@ -180,14 +178,20 @@ impl FileCache {
                 }
 
                 if utd_events.len() != utd_len {
-                    Self::write_serialized(&utd, &paths.utd_file()).await?;
-                    utd_len = utd_events.len();
+                    if let Err(e) = Self::write_serialized(&utd_events, &paths.utd_file()).await {
+                        tracing::error!("Failed writing UTD events: {e}");
+                    } else {
+                        utd_len = utd_events.len();
+                    }
                 }
             }
         }
 
+        // Unneeded after the loop exits.
         serialized_events.clear();
         serialized_events.shrink_to_fit();
+        utd_events.clear();
+        utd_events.shrink_to_fit();
 
         stdout().execute(Clear(ClearType::All))?;
         stdout().execute(cursor::MoveTo(0, 1))?;
@@ -205,8 +209,11 @@ impl FileCache {
     ///
     /// The first vec is for text, the latter for media.
     fn split_media_types(
-        events: Vec<OriginalRoomMessageEvent>,
-    ) -> (Vec<OriginalRoomMessageEvent>, Vec<OriginalRoomMessageEvent>) {
+        events: Vec<OriginalSyncRoomMessageEvent>,
+    ) -> (
+        Vec<OriginalSyncRoomMessageEvent>,
+        Vec<OriginalSyncRoomMessageEvent>,
+    ) {
         let (text, media): (Vec<_>, Vec<_>) =
             events.into_iter().partition(|ev| match ev.content.msgtype {
                 // Text is handled separately from media.
@@ -226,7 +233,7 @@ impl FileCache {
         list: Vec<TimelineEvent>,
     ) -> (
         Vec<JsonValue>,
-        Vec<OriginalRoomMessageEvent>,
+        Vec<OriginalSyncRoomMessageEvent>,
         Vec<JsonValue>,
     ) {
         let mut serialized = Vec::new();
@@ -236,8 +243,10 @@ impl FileCache {
         for ev in list {
             match ev.kind {
                 TimelineEventKind::PlainText { event: plain } => {
-                    if let Ok(plain_ev) = plain.deserialize_as_unchecked::<RoomMessageEvent>()
-                        && let MessageLikeEvent::Original(orig) = plain_ev
+                    if let Ok(plain_ev) = plain.deserialize()
+                        && let AnySyncTimelineEvent::MessageLike(msglike_ev) = plain_ev
+                        && let AnySyncMessageLikeEvent::RoomMessage(msg_ev) = msglike_ev
+                        && let SyncMessageLikeEvent::Original(orig) = msg_ev
                     {
                         if let Ok(val) = serde_json::to_value(&plain) {
                             serialized.push(val);
@@ -246,10 +255,11 @@ impl FileCache {
                     }
                 }
                 TimelineEventKind::Decrypted(decrypted) => {
-                    if let Ok(de) = decrypted
-                        .event
-                        .deserialize_as_unchecked::<RoomMessageEvent>()
-                        && let MessageLikeEvent::Original(orig) = de
+                    if let Ok(decrypted_ev) = decrypted.event.deserialize()
+                        && let AnyTimelineEvent::MessageLike(msglike_ev) = decrypted_ev
+                        && let AnyMessageLikeEvent::RoomMessage(msg_ev) = msglike_ev
+                        // Keep in mind that this conversion *should* drop the room id.
+                        && let SyncMessageLikeEvent::Original(orig) = msg_ev.into()
                     {
                         if let Ok(val) = serde_json::to_value(&decrypted.event) {
                             serialized.push(val);
@@ -261,8 +271,7 @@ impl FileCache {
                     event: utd_raw,
                     utd_info: _,
                 } => {
-                    if let Ok(utd_ev) = utd_raw.deserialize_as_unchecked::<RoomEncryptedEvent>()
-                        && let MessageLikeEvent::Original(_) = utd_ev
+                    if let Ok(_) = utd_raw.deserialize()
                         && let Ok(val) = serde_json::to_value(&utd_raw)
                     {
                         utd.push(val);
@@ -279,10 +288,10 @@ impl FileCache {
         serialized_events: &Vec<JsonValue>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<()> {
-        let serialized =
-            serde_json::to_string_pretty(serialized_events)?;
+        let serialized = serde_json::to_string_pretty(serialized_events)?;
 
         let mut serialized_file = OpenOptions::new()
+            .create(true)
             .write(true)
             .truncate(true)
             .open(path)

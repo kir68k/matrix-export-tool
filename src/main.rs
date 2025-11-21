@@ -1,8 +1,8 @@
 mod cli;
 mod utils;
 
-use std::{io::stdout, time::Duration};
 use std::io::{self, Write};
+use std::{io::stdout, time::Duration};
 
 use cli::interface::UserInfo;
 use cli::prompts;
@@ -103,7 +103,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        println!("Imported {} keys out of {} (including duplicates)", keys.imported_count, keys.total_count);
+        println!(
+            "Imported {} keys out of {} (including duplicates)",
+            keys.imported_count, keys.total_count
+        );
 
         println!("Verifying client...");
         if !utils::client::verify_client(&main_client).await? {

@@ -1,13 +1,19 @@
-use std::{io::stdout, path::PathBuf};
+use std::{
+    io::stdout,
+    path::{Path, PathBuf},
+};
 
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 
 use matrix_sdk::{
     Client,
     deserialized_responses::{TimelineEvent, TimelineEventKind},
     ruma::events::{
         MessageLikeEvent,
-        room::message::{MessageType, OriginalRoomMessageEvent, RoomMessageEvent},
+        room::{
+            encrypted::{OriginalRoomEncryptedEvent, RoomEncryptedEvent},
+            message::{MessageType, OriginalRoomMessageEvent, RoomMessageEvent},
+        },
     },
     stream::StreamExt,
 };
@@ -33,10 +39,11 @@ pub struct FileCache {
 pub struct WriteDirs {
     //user_dir: PathBuf,
     //text_dir: PathBuf,
+    user: String,
     media_dir: PathBuf,
     text_file: PathBuf,
     /// For serialized output of all events
-    serialized_file: PathBuf,
+    serialized_dir: PathBuf,
 }
 
 impl WriteDirs {
@@ -53,7 +60,7 @@ impl WriteDirs {
         let serialized_dir = user_dir.join("events");
         let serialized_file = serialized_dir
             .join(format!("{} - Events", user))
-            .with_extension("ron");
+            .with_extension("json");
 
         // create dirs
         dir_builder.recursive(true).create(&text_dir).await?;
@@ -80,14 +87,30 @@ impl WriteDirs {
         let dirs = Self {
             media_dir,
             text_file,
-            serialized_file,
+            serialized_dir,
+            user: user.to_owned(),
         };
 
         anyhow::Ok(dirs)
     }
 
+    /// Reference to the media directory path
     pub fn media_dir(&self) -> &PathBuf {
         &self.media_dir
+    }
+
+    /// File for the serialized events
+    pub fn serialized_file(&self) -> PathBuf {
+        self.serialized_dir
+            .join(format!("{} - Events", self.user))
+            .with_extension("json")
+    }
+
+    /// File for events which couldn't be decrypted
+    pub fn utd_file(&self) -> PathBuf {
+        self.serialized_dir
+            .join(format!("{} - Unable to decrypt", self.user))
+            .with_extension("json")
     }
 }
 
@@ -108,14 +131,15 @@ impl FileCache {
         let text_buffer = TextBuffer::new(&paths.text_file);
         let mut media_buffer = Vec::new();
 
-        let mut serialized_events = Vec::new();
-        let mut last_serialized_len: usize = 0;
+        let (mut serialized_events, mut utd_events) = (Vec::new(), Vec::new());
+        let (mut serialized_len, mut utd_len) = (0, 0);
 
         while let Some(list) = msg_rx.recv().await {
-            let (mut serialized, deserialized) = Self::split_serialized_deserialized(list);
+            let (mut serialized, deserialized, mut utd) = Self::split_event_kinds(list);
             serialized_events.append(&mut serialized);
+            utd_events.append(&mut utd);
 
-            let (text, mut media) = Self::split_event_types(deserialized);
+            let (text, mut media) = Self::split_media_types(deserialized);
 
             // It's okay to directly process text here.
             let text_buffer = &text_buffer.clone();
@@ -141,32 +165,23 @@ impl FileCache {
                 //
                 // Rationale: I have to nuke my homeserver but want to keep event data.
                 // This will become more useful in the future.
-                if serialized_events.len() != last_serialized_len {
+                if serialized_events.len() != serialized_len {
                     // mostly for debugging.
                     stdout().execute(Clear(ClearType::All))?;
                     stdout().execute(cursor::MoveTo(0, 1))?;
                     println!(
-                        "Writing {} serialized events to file...",
+                        "Writing {} total serialized events to file...",
                         serialized_events.len()
                     );
 
-                    let serialized = ron::ser::to_string_pretty(
-                        &serialized_events,
-                        ron::ser::PrettyConfig::default(),
-                    )
-                    .unwrap();
+                    Self::write_serialized(&serialized_events, &paths.serialized_file()).await?;
 
-                    // The file is created by WriteDirs::setup_files(), and overridden on each signal.
-                    let mut serialized_file = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(&paths.serialized_file)
-                        .await?;
+                    serialized_len = serialized_events.len();
+                }
 
-                    serialized_file.write_all(serialized.as_bytes()).await?;
-                    serialized_file.flush().await?;
-
-                    last_serialized_len = serialized_events.len();
+                if utd_events.len() != utd_len {
+                    Self::write_serialized(&utd, &paths.utd_file()).await?;
+                    utd_len = utd_events.len();
                 }
             }
         }
@@ -185,10 +200,11 @@ impl FileCache {
         anyhow::Ok(())
     }
 
-    /// This filters out redacted events, and returns two vectors with original events.
+    /// Takes a list of already filtered events, and splits text/media into two vecs,
+    /// while consuming the original list.
     ///
-    /// The first vector is for text events, and the latter for all other events.
-    fn split_event_types(
+    /// The first vec is for text, the latter for media.
+    fn split_media_types(
         events: Vec<OriginalRoomMessageEvent>,
     ) -> (Vec<OriginalRoomMessageEvent>, Vec<OriginalRoomMessageEvent>) {
         let (text, media): (Vec<_>, Vec<_>) =
@@ -201,14 +217,21 @@ impl FileCache {
         (text, media)
     }
 
-
-    /// Takes a list of received events, filters redacted/unable to decrypt, and returns two vecs.
-    /// One vec is for JSON of the events, the other for their deserialized form.
-    fn split_serialized_deserialized(
+    /// Takes a list of events, filters redacted, and returns three vecs:
+    /// serialized, plain+decrypted, unable to decrypt (serialized)
+    ///
+    /// The first two vecs are for the *same* events in the same order,
+    /// while the third is only for utd events.
+    fn split_event_kinds(
         list: Vec<TimelineEvent>,
-    ) -> (Vec<Value>, Vec<OriginalRoomMessageEvent>) {
+    ) -> (
+        Vec<JsonValue>,
+        Vec<OriginalRoomMessageEvent>,
+        Vec<JsonValue>,
+    ) {
         let mut serialized = Vec::new();
         let mut deserialized = Vec::new();
+        let mut utd = Vec::new();
 
         for ev in list {
             match ev.kind {
@@ -218,7 +241,7 @@ impl FileCache {
                     {
                         if let Ok(val) = serde_json::to_value(&plain) {
                             serialized.push(val);
-                        }
+                        };
                         deserialized.push(orig);
                     }
                 }
@@ -230,14 +253,50 @@ impl FileCache {
                     {
                         if let Ok(val) = serde_json::to_value(&decrypted.event) {
                             serialized.push(val);
-                        }
+                        };
                         deserialized.push(orig);
                     }
                 }
-                _ => {}
+                TimelineEventKind::UnableToDecrypt {
+                    event: utd_raw,
+                    utd_info: _,
+                } => {
+                    if let Ok(utd_ev) = utd_raw.deserialize_as_unchecked::<RoomEncryptedEvent>()
+                        && let MessageLikeEvent::Original(_) = utd_ev
+                        && let Ok(val) = serde_json::to_value(&utd_raw)
+                    {
+                        utd.push(val);
+                    }
+                }
             }
         }
 
-        (serialized, deserialized)
+        (serialized, deserialized, utd)
+    }
+
+    /// Takes a list of events (or any [`JsonValue`]) with a full `path` and writes to it.
+    async fn write_serialized(
+        serialized_events: &Vec<JsonValue>,
+        path: impl AsRef<Path>,
+    ) -> anyhow::Result<()> {
+        let serialized =
+            serde_json::to_string_pretty(serialized_events)?;
+
+        let mut serialized_file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .await?;
+
+        let write = serialized_file.write_all(serialized.as_bytes()).await;
+        let flush = serialized_file.flush().await;
+        match (write, flush) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Ok(_), Err(e)) => Err(anyhow::anyhow!("Error finishing serialized write: {e}")),
+            (Err(e), Ok(_)) => Err(anyhow::anyhow!("Error writing serialized write: {e}")),
+            (Err(we), Err(fe)) => Err(anyhow::anyhow!(
+                "Errors writing to serialized file: {we}\n{fe}"
+            )),
+        }
     }
 }

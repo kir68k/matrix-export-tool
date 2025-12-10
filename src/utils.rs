@@ -1,4 +1,4 @@
 pub mod cache;
 pub mod client;
 pub mod export;
-pub mod traits;
+pub mod media;

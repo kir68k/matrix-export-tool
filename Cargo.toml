@@ -8,8 +8,9 @@ license = "ISC"
 [dependencies]
 anyhow = "1.0"
 config = { version = "0.15", features = ["toml"] }
-matrix-sdk = { version = "0.14", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls", "qrcode"] }
+matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "rustls-tls", "qrcode"] }
 mime = "0.3"
+mimetype-detector = "0.3.3"
 promkit = { version = "0.10", features = ["all"] }
 promkit-derive = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls", "system-proxy"] }

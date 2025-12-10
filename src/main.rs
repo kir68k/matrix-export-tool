@@ -1,6 +1,7 @@
 mod cli;
 mod utils;
 
+use std::env;
 use std::io::{self, Write};
 use std::{io::stdout, time::Duration};
 
@@ -8,6 +9,7 @@ use cli::interface::UserInfo;
 use cli::prompts;
 
 use config::Config;
+use matrix_sdk::LoopCtrl;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::presence::PresenceState;
 use promkit::core::crossterm::{
@@ -17,6 +19,7 @@ use promkit::core::crossterm::{
 };
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
+use tracing::Level;
 use utils::cache::user_cache::ExportCache;
 
 // Keeping this for later as a reminder.
@@ -48,10 +51,17 @@ async fn load_config() -> anyhow::Result<UserInfo> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // for debugging.
+    let args: Vec<String> = env::args().collect();
+    let loglevel = match args[1].as_str() {
+        "--debug" | "-d" => Level::DEBUG,
+        _ => Level::INFO,
+    };
+
     let log_file = tracing_appender::rolling::never(".", "met-export.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(log_file);
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(loglevel)
         .with_writer(non_blocking)
         .init();
 
@@ -59,17 +69,19 @@ async fn main() -> anyhow::Result<()> {
     let user = load_config().await?;
     let client = utils::client::login(&user).await?;
 
+    // Background sync task (might be expanded in the future, probably with gui?)
     {
         let sync_client = client.clone();
-        let sync_token = token.clone();
         tokio::task::spawn(async move {
-            // This client can't respond to messages :p
-            let sync_settings = SyncSettings::new().set_presence(PresenceState::Unavailable);
-
-            tokio::select! {
-                _ = sync_token.cancelled() => { }
-                _ = sync_client.sync(sync_settings) => { }
-            }
+            // fyi, this is the same as `sync`, but using that hit the recursion limit after updating
+            // to 0.16.0. This used to also run inside select! with a CancellationToken, which
+            // might've increased recursion.
+            sync_client.sync_with_callback(
+                SyncSettings::new().set_presence(PresenceState::Unavailable),
+                |_| async {
+                    LoopCtrl::Continue
+                }
+            ).await
         });
     }
 

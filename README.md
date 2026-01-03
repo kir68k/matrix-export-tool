@@ -50,7 +50,10 @@ Every time the cache is updated, the last 10,000 messages/events get written too
 That means if you download 29k events and exit, only 20k are exported, but guarantees consistency when resuming later.
 
 ## Performance
-> [!info] This might be outdated.
+
+> [!note]
+> **This might be outdated.**
+> 
 > I'll have to test the speeds again as most of the program
 > has changed after moving onto a graphical interface.
 >

@@ -1,0 +1,117 @@
+{
+  "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
+  "name": "Shadcn",
+  "author": "shadcn",
+  "url": "https://ui.shadcn.com/docs/theming",
+  "themes": [
+    {
+      "name": "Shadcn Dark",
+      "mode": "dark",
+      "radius": 10,
+      "radius.lg": 12,
+      "colors": {
+        "accent.background": "#262626",
+        "accent.foreground": "#FBFBFB",
+        "background": "#0A0A0A",
+        "foreground": "#FBFBFB",
+        "muted.background": "#262626",
+        "muted.foreground": "#A1A1A1",
+        "group_box.background": "#171717",
+        "group_box.foreground": "#FBFBFB",
+        "popover.background": "#171717",
+        "popover.foreground": "#FBFBFB",
+        "primary.background": "#E5E5E5",
+        "primary.foreground": "#171717",
+        "secondary.background": "#262626",
+        "secondary.foreground": "#FBFBFB",
+        "danger.background": "#FF6467",
+        "danger.foreground": "#FBFBFB",
+        "border": "#262626",
+        "input.border": "#262626",
+        "ring": "#737373",
+        "sidebar.background": "#171717",
+        "sidebar.foreground": "#FBFBFB",
+        "sidebar.primary.background": "#E5E5E5",
+        "sidebar.primary.foreground": "#171717",
+        "sidebar.accent.background": "#262626",
+        "sidebar.accent.foreground": "#FBFBFB",
+        "sidebar.border": "#262626",
+        "chart.1": "#92C5FF",
+        "chart.2": "#3A82F6",
+        "chart.3": "#2565EF",
+        "chart.4": "#1A4DDA",
+        "chart.5": "#1F3DAD",
+        "warning.background": "#2565EF",
+        "success.background": "#3A82F6",
+        "info.background": "#92C5FF",
+        "warning.foreground": "#171717",
+        "success.foreground": "#171717",
+        "info.foreground": "#171717",
+
+        "primary.active.background": "#cecece",
+        "primary.hover.background": "#e8e8e8",
+
+        "secondary.active.background": "#222222",
+        "secondary.hover.background": "#3c3c3c",
+
+        "danger.active.background": "#ff4044",
+        "danger.hover.background": "#ff7376",
+
+        "warning.active.background": "#1155e7",
+        "warning.hover.background": "#3b74f1",
+
+        "success.active.background": "#1d70f5",
+        "success.hover.background": "#4e8ef7",
+
+        "info.active.background": "#6ab0ff",
+        "info.hover.background": "#9dcbff",
+
+        "list.background": "#0a0a0a",
+        "list.hover.background": "#262626",
+        "list.active.background": "#262626",
+        "list.active.border": "#e5e5e5",
+
+        "table.background": "#0a0a0a",
+        "table.hover.background": "#262626",
+        "table.active.background": "#262626",
+        "table.active.border": "#e5e5e5",
+        "table.head.background": "#262626",
+        "table.head.foreground": "#a1a1a1",
+        "table.row.border": "#262626",
+
+        "tab.background": "#262626",
+        "tab.foreground": "#a1a1a1",
+        "tab.active.background": "#0a0a0a",
+        "tab.active.foreground": "#fbfbfb",
+        "tab_bar.background": "#262626",
+
+        "skeleton.background": "#262626",
+        "progress.bar.background": "#e5e5e5",
+
+        "switch.background": "#262626",
+        "switch.thumb.background": "#0a0a0a",
+
+        "slider.background": "#262626",
+        "slider.thumb.background": "#0a0a0a",
+
+        "scrollbar.background": "#0a0a0a00",
+        "scrollbar.thumb.background": "#262626",
+        "scrollbar.thumb.hover.background": "#a1a1a1",
+
+        "caret": "#fbfbfb",
+        "selection.background": "#0a0a0a4d",
+
+        "title_bar.background": "#0a0a0a",
+        "title_bar.border": "#262626",
+        "window.border": "#262626",
+
+        "base.blue": "#bac1f7",
+        "base.cyan": "#8cc7e7",
+        "base.green": "#add8a8",
+        "base.magenta": "#c6aaf6",
+        "base.red": "#e696a9",
+        "base.yellow": "#e6d4b0"
+      }
+    }
+  ]
+}

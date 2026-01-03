@@ -43,19 +43,89 @@
           }
         );
 
-        matrix-export-tool = craneLib.buildPackage {
+        commonArgs = {
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
 
-          nativeBuildInputs = matrix-export-tool.buildInputs;
-        };
-      in
-      {
-        checks = {
-          inherit matrix-export-tool;
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            mold
+          ];
         };
 
+        cargoArtifacts = craneLib.buildDepsOnly (
+          commonArgs
+          // {
+            pname = "matrix-export-tool-deps";
+          }
+        );
+
+        matrix-export-tool-clippy = craneLib.cargoClippy (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+            # cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+            cargoClippyExtraArgs = "--all-targets";
+          }
+        );
+
+        matrix-export-tool-coverage = craneLib.cargoTarpaulin (
+          commonArgs
+          // {
+            inherit cargoArtifacts;
+          }
+        );
+
+        matrix-export-tool = craneLib.buildPackage (
+          commonArgs
+          // rec {
+            inherit cargoArtifacts;
+            dontPatchELF = true;
+
+            buildInputs =
+              with pkgs;
+              [
+                fontconfig
+                freetype
+              ]
+              ++ lib.optionals stdenv.hostPlatform.isLinux [
+                alsa-lib
+                libGL
+                vulkan-loader
+                wayland
+                libx11
+                libxcb
+                libxext
+                libxkbcommon
+              ];
+
+            # Note for non-NixOS: This still requires using `nixVulkanIntel` from the nixGL repo.
+            # I have spent way too much time being confused over this quirk.
+            postFixup =
+              with pkgs;
+              lib.optionalString stdenv.hostPlatform.isLinux ''
+                patchelf --add-rpath ${
+                  lib.makeLibraryPath [
+                    wayland
+                    vulkan-loader
+                    libglvnd
+                  ]
+                } $out/bin/matrix-export-tool
+              '';
+          }
+        );
+
+      in
+      {
         packages.default = matrix-export-tool;
+
+        checks = {
+          inherit
+            matrix-export-tool
+            matrix-export-tool-clippy
+            matrix-export-tool-coverage
+            ;
+        };
 
         devShells.default = craneLib.devShell {
           # Inherit inputs from checks.
@@ -63,10 +133,9 @@
 
           # Extra inputs can be added here; cargo and rustc are provided by default
           # from the toolchain that was specified earlier.
-          packages =
-            [
-              pkgs.cargo-edit
-            ];
+          packages = with pkgs; [
+            cargo-edit
+          ];
         };
       }
     );

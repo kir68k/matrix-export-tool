@@ -26,6 +26,7 @@ The program will export the following event types, automatically decrypting if n
 - [gpui_component]: UI components, titlebar
 - [keyring_core]: Native secret management
 - [mimalloc]: A performant allocator
+- [lucide]: Icons used throughout the UI
 
 ## Running
 To run the program, either build it with cargo, or use Nix.
@@ -83,3 +84,4 @@ Plans for features/improvements (no eta):
 [gpui_component]: https://crates.io/crates/gpui-component
 [keyring_core]: https://crates.io/crates/keyring-core
 [mimalloc]: https://crates.io/crates/mimalloc
+[lucide]: https://lucide.dev

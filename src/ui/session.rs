@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as ErrorContext;
 use matrix_sdk::{
@@ -9,7 +9,7 @@ use matrix_sdk::{
 
 use rand::{Rng, distr::Alphanumeric, rng};
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::fs as async_fs;
 
 use crate::ui::{APP_ID, ExportUser};
 
@@ -52,8 +52,8 @@ pub trait UserSession {
     /// Build necessary client and session data.
     async fn build_client(
         server_name: &ServerName,
-        db_path: &PathBuf,
-        db_passphrase: &String,
+        db_path: impl AsRef<Path>,
+        db_passphrase: impl AsRef<str>,
     ) -> anyhow::Result<Client>;
     /// Restore a session, e.g. from a session file.
     async fn restore_session(&self) -> anyhow::Result<(Client, String)>;
@@ -73,12 +73,15 @@ const ACCESS_TOKEN_KEY: &str = "access_token";
 
 /// Retrieve a secret in the OS keyring
 async fn get_secret_from_keyring(userid: impl ToString, key: &str) -> anyhow::Result<String> {
-    let userid = userid.to_string();
-    let key = key.to_string();
+    let secret = {
+        let userid = userid.to_string();
+        let key = key.to_string();
 
-    let entry_name = format!("{}:{}", key, userid);
-    let db_entry = keyring_core::Entry::new(APP_ID, &entry_name)?;
-    let secret = db_entry.get_secret()?;
+        let entry_name = format!("{}:{}", key, userid);
+        let db_entry = keyring_core::Entry::new(APP_ID, &entry_name)?;
+
+        db_entry.get_secret()
+    }?;
 
     Ok(String::from_utf8(secret)?)
 }
@@ -89,11 +92,14 @@ async fn store_secret_in_keyring(
     key: &str,
     secret: String,
 ) -> anyhow::Result<()> {
-    let userid = userid.to_string();
-    let key = key.to_string();
+    let db_entry = {
+        let userid = userid.to_string();
+        let key = key.to_string();
+        let entry_name = format!("{}:{}", key, userid);
 
-    let entry_name = format!("{}:{}", key, userid);
-    let db_entry = keyring_core::Entry::new(APP_ID, &entry_name)?;
+        keyring_core::Entry::new(APP_ID, &entry_name)
+    }?;
+
     db_entry.set_secret(secret.as_bytes())?;
 
     Ok(())
@@ -101,12 +107,15 @@ async fn store_secret_in_keyring(
 
 /// Remove a secret from the OS keyring
 async fn delete_secret_from_keyring(userid: impl ToString, key: &str) -> anyhow::Result<()> {
-    let userid = userid.to_string();
-    let key = key.to_string();
+    let db_entry = {
+        let userid = userid.to_string();
+        let key = key.to_string();
+        let entry_name = format!("{}:{}", key, userid);
 
-    let entry_name = format!("{}:{}", key, userid);
-    let db_entry = keyring_core::Entry::new(APP_ID, &entry_name)?;
-    let _ = db_entry.delete_credential();
+        keyring_core::Entry::new(APP_ID, &entry_name)
+    }?;
+
+    db_entry.delete_credential()?;
 
     Ok(())
 }
@@ -116,14 +125,17 @@ fn build_client_session(user: &ExportUser) -> anyhow::Result<ClientSession> {
         userid, data_dir, ..
     } = &user;
 
-    let mut rng = rng();
+    let db_path = {
+        let mut rng = rng();
 
-    let db_subdir: String = (&mut rng)
-        .sample_iter(Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-    let db_path = data_dir.join(db_subdir);
+        let db_subdir: String = (&mut rng)
+            .sample_iter(Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+
+        data_dir.join(db_subdir)
+    };
 
     let user_id = ruma::UserId::parse(userid)?;
 
@@ -145,35 +157,38 @@ fn generate_db_passphrase() -> String {
 
 impl UserSession for ExportUser {
     async fn restore_session(&self) -> anyhow::Result<(Client, String)> {
-        // read session file
-        let serialized = fs::read_to_string(&self.session_file).await?;
-        let FullSession {
-            client_session,
-            user_session,
-            // sync_token,
-        } = serde_json::from_str(&serialized)?;
-        let user_id = user_session.meta.user_id.to_string();
+        let (client, user_session, access_token) = {
+            let serialized = async_fs::read_to_string(&self.session_file).await?;
 
-        // retrieve both secrets from keyring
-        let db_passphrase =
-            get_secret_from_keyring(&user_session.meta.user_id, DB_PASSPHRASE_KEY).await?;
-        let access_token =
-            get_secret_from_keyring(&user_session.meta.user_id, ACCESS_TOKEN_KEY).await?;
+            let FullSession {
+                client_session,
+                user_session,
+            } = serde_json::from_str(&serialized)?;
+
+            let (db_passphrase, access_token) = (
+                get_secret_from_keyring(&user_session.meta.user_id, DB_PASSPHRASE_KEY).await?,
+                get_secret_from_keyring(&user_session.meta.user_id, ACCESS_TOKEN_KEY).await?,
+            );
+
+            let client = Self::build_client(
+                &client_session.homeserver,
+                &client_session.db_path,
+                &db_passphrase,
+            )
+            .await?;
+
+            anyhow::Ok((client, user_session, access_token))
+        }?;
+
+        let user_id = user_session.meta.user_id.to_string();
 
         let full_user_session = MatrixSession {
             meta: user_session.meta,
             tokens: SessionTokens {
-                access_token: access_token.into(),
+                access_token,
                 refresh_token: user_session.refresh_token,
             },
         };
-
-        let client = Self::build_client(
-            &client_session.homeserver,
-            &client_session.db_path,
-            &db_passphrase,
-        )
-        .await?;
 
         client.restore_session(full_user_session).await?;
 
@@ -189,42 +204,45 @@ impl UserSession for ExportUser {
             ..
         } = &self;
 
-        fs::create_dir_all(data_dir).await?;
+        async_fs::create_dir_all(data_dir).await?;
 
         let db_passphrase = generate_db_passphrase();
-        let client_session = build_client_session(&self)?;
+        let client_session = build_client_session(self)?;
         let client = Self::build_client(
             &client_session.homeserver,
             &client_session.db_path,
             &db_passphrase,
         )
         .await?;
-        let matrix_auth = client.matrix_auth();
 
-        matrix_auth
-            .login_username(&userid, &password)
-            .initial_device_display_name("matrix-export-tool")
-            .await?;
+        let (full_session, access_token) = {
+            let matrix_auth = client.matrix_auth();
 
-        let matrix_session = matrix_auth
-            .session()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get user session"))?;
+            matrix_auth
+                .login_username(userid, password)
+                .initial_device_display_name("matrix-export-tool")
+                .await?;
 
-        // gets saved as an OS secret later
-        let access_token = matrix_session.tokens.access_token.to_string();
+            let matrix_session = matrix_auth
+                .session()
+                .context("Couldn't get the client's auth session.")?;
+            let access_token = matrix_session.tokens.access_token.to_string();
 
-        let sanitized_session = SanitizedMatrixSession {
-            meta: matrix_session.meta.clone(),
-            refresh_token: matrix_session.tokens.refresh_token.clone(),
-        };
+            let sanitized_session = SanitizedMatrixSession {
+                meta: matrix_session.meta.clone(),
+                refresh_token: matrix_session.tokens.refresh_token.clone(),
+            };
 
-        let full_session = FullSession {
-            client_session,
-            user_session: sanitized_session,
-            // sync_token: None,
-        };
-        let serialized = serde_json::to_string(&full_session)?;
-        fs::write(session_file, serialized).await?;
+            anyhow::Ok((
+                FullSession {
+                    client_session,
+                    user_session: sanitized_session,
+                },
+                access_token,
+            ))
+        }?;
+
+        async_fs::write(session_file, serde_json::to_string(&full_session)?).await?;
 
         let user_id = &full_session.user_session.meta.user_id;
         store_secret_in_keyring(user_id, DB_PASSPHRASE_KEY, db_passphrase).await?;
@@ -235,16 +253,17 @@ impl UserSession for ExportUser {
 
     async fn build_client(
         server_name: &ServerName,
-        db_path: &PathBuf,
-        db_passphrase: &String,
+        db_path: impl AsRef<Path>,
+        db_passphrase: impl AsRef<str>,
     ) -> anyhow::Result<Client> {
         #[cfg(feature = "http_debug")]
-        let client = client_custom_tls(server_name, db_path, db_passphrase).await?;
+        let client =
+            client_custom_tls(server_name, db_path.as_ref(), db_passphrase.as_ref()).await?;
 
         #[cfg(not(feature = "http_debug"))]
         let client = Client::builder()
             .server_name(server_name)
-            .sqlite_store(db_path, Some(db_passphrase))
+            .sqlite_store(db_path.as_ref(), Some(db_passphrase.as_ref()))
             .build()
             .await?;
 
@@ -252,8 +271,8 @@ impl UserSession for ExportUser {
     }
 
     async fn logout(&self) -> anyhow::Result<()> {
-        if fs::try_exists(&self.session_file).await? {
-            fs::remove_file(&self.session_file).await?;
+        if async_fs::try_exists(&self.session_file).await? {
+            async_fs::remove_file(&self.session_file).await?;
         }
 
         // I'd rather use ClientSession for consistency but I'm not sure if ExportUser should have it
@@ -262,7 +281,6 @@ impl UserSession for ExportUser {
 
         self.client
             .as_ref()
-            .clone()
             .context("ERR logging out: No client, somehow?")?
             .logout()
             .await?;
@@ -280,8 +298,8 @@ impl UserSession for ExportUser {
 #[cfg(feature = "http_debug")]
 async fn client_custom_tls(
     server_name: &ServerName,
-    db_path: &PathBuf,
-    db_passphrase: &String,
+    db_path: impl AsRef<Path>,
+    db_passphrase: impl AsRef<str>,
 ) -> anyhow::Result<Client> {
     use std::sync::Arc;
 
@@ -312,7 +330,7 @@ async fn client_custom_tls(
 
     let client = Client::builder()
         .server_name(server_name)
-        .sqlite_store(db_path, Some(db_passphrase))
+        .sqlite_store(db_path, Some(db_passphrase.as_ref()))
         .http_client(reqwest_client)
         .build()
         .await?;

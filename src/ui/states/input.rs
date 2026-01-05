@@ -1,4 +1,4 @@
-use gpui::{AppContext, Context, Entity, SharedString, Window};
+use gpui::{AppContext, Context, Entity, Window};
 use gpui_component::input::InputState;
 
 use crate::ui::ExportApp;

@@ -25,7 +25,7 @@ impl ListDelegate for RoomListDelegate {
     fn items_count(&self, _section: usize, cx: &App) -> usize {
         self.app
             .read_with(cx, |app, _| app.user.room_list.len())
-            .unwrap_or_else(|_| 0)
+            .unwrap_or(0)
     }
 
     fn render_item(
@@ -79,11 +79,15 @@ pub struct Dashboard {
 
 impl Dashboard {
     pub fn new(app: WeakEntity<ExportApp>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let delegate = RoomListDelegate {
-            app: app.clone(),
-            dashboard: cx.entity().downgrade(),
+        let room_list = {
+            let delegate = RoomListDelegate {
+                app: app.clone(),
+                dashboard: cx.entity().downgrade(),
+            };
+
+            cx.new(|cx| ListState::new(delegate, window, cx))
         };
-        let room_list = cx.new(|cx| ListState::new(delegate, window, cx));
+
         let main_view: AnyView = cx.new(|cx| TodoView::new(app.clone(), window, cx)).into();
 
         Self {
@@ -124,7 +128,7 @@ impl Dashboard {
         let avatar_fallback = display_name
             .chars()
             .next()
-            .unwrap_or_else(|| '?')
+            .unwrap_or('?')
             .to_uppercase()
             .to_string();
 

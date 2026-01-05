@@ -349,8 +349,8 @@ impl ExportApp {
                             None
                         }
                     })
-                    .and_then(|data| Some(Image::from_bytes(data.0, data.1)))
-                    .map(|image| Arc::new(image))
+                    .map(|data| Image::from_bytes(data.0, data.1))
+                    .map(Arc::new)
                 } else {
                     None
                 };
@@ -391,7 +391,7 @@ impl ExportApp {
                     let new = RoomData {
                         display_name,
                         avatar,
-                        last_msg: Some(last_msg.unwrap_or_else(|| LastMessage::None)),
+                        last_msg: Some(last_msg.unwrap_or(LastMessage::None)),
                     };
 
                     // if the entry exists, only update the avatar if we got one
@@ -481,7 +481,8 @@ impl ExportApp {
                 match user.restore_session().await {
                     Ok((client, userid)) => {
                         let rooms = client.joined_rooms();
-                        let _ = view.update(
+
+                        view.update(
                             &mut cx,
                             |app: &mut ExportApp, cx: &mut Context<ExportApp>| {
                                 app.user.set_client(client);
@@ -493,20 +494,23 @@ impl ExportApp {
                                 app.background_sync(cx);
                                 cx.notify();
                             },
-                        );
+                        )?;
                     }
                     Err(e) => {
                         eprintln!("Session restoration failed: {}", e);
-                        let _ = view.update(
+
+                        view.update(
                             &mut cx,
                             |app: &mut ExportApp, cx: &mut Context<ExportApp>| {
                                 app.state = AppState::Login;
                                 app.dashboard_view = None;
                                 cx.notify();
                             },
-                        );
+                        )?;
                     }
                 }
+
+                anyhow::Ok(())
             }
         })
         .detach();
@@ -523,7 +527,8 @@ impl ExportApp {
                 match user.login().await {
                     Ok((client, _)) => {
                         let rooms = client.joined_rooms();
-                        let _ = view.update(
+
+                        view.update(
                             &mut cx,
                             |app: &mut ExportApp, cx: &mut Context<ExportApp>| {
                                 app.user.set_client(client);
@@ -535,19 +540,22 @@ impl ExportApp {
                                 app.background_sync(cx);
                                 cx.notify();
                             },
-                        );
+                        )?;
                     }
                     Err(e) => {
                         eprintln!("Login failed: {}", e);
-                        let _ = view.update(
+
+                        view.update(
                             &mut cx,
                             |_app: &mut ExportApp, cx: &mut Context<ExportApp>| {
                                 // stay in login state on failure
                                 cx.notify();
                             },
-                        );
+                        )?;
                     }
                 }
+
+                anyhow::Ok(())
             }
         })
         .detach();
@@ -563,18 +571,20 @@ impl ExportApp {
                 if user.client.is_some() {
                     match user.logout().await {
                         Ok(_) => {
-                            let _ = view.update(&mut cx, |app, cx| {
+                            view.update(&mut cx, |app, cx| {
                                 app.user.client = None;
                                 app.state = AppState::Login;
                                 app.dashboard_view = None;
                                 cx.notify();
-                            });
+                            })?;
                         }
                         Err(e) => {
                             eprintln!("Failed to log out: {}", e);
                         }
                     }
                 }
+
+                anyhow::Ok(())
             }
         })
         .detach();
@@ -609,29 +619,31 @@ impl ExportApp {
                     // check if the client exists, exit if no
                     // avoids log spam and having a useless task :p
                     if let Ok(false) = view.read_with(&cx, |view, _| view.user.client.is_some()) {
-                        return;
+                        return Err(anyhow::anyhow!("No client, stopping background sync."));
                     }
 
                     match sync_response {
                         Ok(_) => {
                             let rooms = client.joined_rooms();
-                            let _ = view.update(&mut cx, |app, cx| {
+                            view.update(&mut cx, |app, cx| {
                                 app.user.room_list = rooms;
                                 if app.sync_status != SyncStatus::Syncing {
                                     app.sync_status = SyncStatus::Syncing;
                                 }
                                 cx.notify();
-                            });
+                            })?;
                         }
                         Err(e) => {
                             let err = SharedString::from(e.to_string());
-                            let _ = view.update(&mut cx, |app, cx| {
+                            view.update(&mut cx, |app, cx| {
                                 app.sync_status = SyncStatus::Error(err);
                                 cx.notify();
-                            });
+                            })?;
                         }
                     }
                 }
+
+                anyhow::Ok(())
             }
         })
         .detach();

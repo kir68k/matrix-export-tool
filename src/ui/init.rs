@@ -60,8 +60,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyView {
-        let app_state = app.read(cx).state.clone();
-        match app_state {
+        match app.read(cx).state.clone() {
             AppState::Dashboard => {
                 let app_weak = app.downgrade();
                 cx.new(|cx| Dashboard::new(app_weak, window, cx)).into()
@@ -243,10 +242,6 @@ pub fn create_new_window(cx: &mut App) {
 
 /// Helper fn to initialize things before running the UI.
 pub fn init() -> anyhow::Result<()> {
-    // TODO: Decide whether tokio should be a dependency
-    // It's the matrix sdk's executor, so this is just a re-export,
-    // and while I might integrate exporting into gpui tasks,
-    // non-blocking file i/o will require either tokio or parts of smol.
     let runtime = matrix_sdk::executor::Runtime::new()?;
     let _guard = runtime.enter();
 

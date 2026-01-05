@@ -69,7 +69,7 @@ pub enum SasFlowState {
     },
     KeysExchanged {
         sas: SasVerification,
-        emojis: [Emoji; 7],
+        emojis: Box<[Emoji; 7]>,
     },
     Confirming {
         sas: SasVerification,
@@ -175,16 +175,16 @@ impl VerificationView {
 
         while let Some(state) = sas.changes().next().await {
             match state {
-                SasState::KeysExchanged { emojis, .. } => {
-                    if let Some(data) = emojis {
-                        view.update(cx, |this, cx| {
-                            this.state = VerificationFlowState::Sas(SasFlowState::KeysExchanged {
-                                sas: sas.clone(),
-                                emojis: data.emojis,
-                            });
-                            cx.notify();
-                        })?;
-                    }
+                SasState::KeysExchanged {
+                    emojis: Some(data), ..
+                } => {
+                    view.update(cx, |this, cx| {
+                        this.state = VerificationFlowState::Sas(SasFlowState::KeysExchanged {
+                            sas: sas.clone(),
+                            emojis: Box::new(data.emojis),
+                        });
+                        cx.notify();
+                    })?;
                 }
                 SasState::Done { .. } => {
                     view.update(cx, |this, cx| {

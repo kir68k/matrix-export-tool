@@ -19,7 +19,7 @@ gpui = { version = "0.2.2", default-features = false, features = [
     "windows-manifest",
 ] }
 gpui-component = "0.5.0"
-keyring-core = "0.7.1"
+keyring-core = "0.7.2"
 matrix-sdk = { version = "0.16", default-features = false, features = [
     "e2e-encryption",
     "automatic-room-key-forwarding",
@@ -33,12 +33,6 @@ mimalloc = { version = "0.1.48", features = ["v3", "no_thp", "override"] }
 mime = "0.3"
 mimetype-detector = "0.3.4"
 rand = "0.9.2"
-reqwest = { version = "0.12.28", default-features = false, features = [
-    "charset",
-    "http2",
-    "rustls-tls",
-    "system-proxy",
-] }
 rust-embed = { version = "8.9.0", features = [
     "compression",
     "deterministic-timestamps",
@@ -53,12 +47,11 @@ tokio = { version = "1.49.0", features = [
     "time",
     "sync",
 ] }
-tokio-stream = "0.1.17"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-core = { version = "0.1.36", default-features = false }
 tracing-subscriber = "0.3.22"
-webpki-roots = { version = "1.0.4", optional = true }
+webpki-roots = { version = "1.0.5", optional = true }
 zeroize = "1.8.2"
 
 [profile.release]
@@ -68,10 +61,13 @@ strip = 'symbols'
 lto = 'thin'
 debug = "none"
 
+# Optimizing dependencies for dev may not be necessary.
+# IIRC I set this as the UI was unusable, I think.
 [profile.dev.package."*"]
 opt-level = 2
 
 [profile.dev]
+debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
 [target.'cfg(target_os = "linux")'.dependencies]

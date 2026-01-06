@@ -43,4 +43,9 @@ tags
 # Nix output dir
 result
 
+# The *full* icon/asset dir
+# This is for development, only *used* icons will
+# be in `assets/icons` (there are >3k files in the full set)
+.assets
+
 .tests
